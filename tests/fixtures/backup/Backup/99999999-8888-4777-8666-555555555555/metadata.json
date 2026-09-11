@@ -1,0 +1,17 @@
+{
+  "exportId" : "C0FFEE00-0000-4000-8000-000000000002",
+  "schemaVersion" : "2.2.0",
+  "exportMode" : "bucketed",
+  "exportType" : "full",
+  "sessionStartDate" : "2024-01-02T03:04:05Z",
+  "sessionFinishDate" : "2024-01-02T03:09:05Z",
+  "lastBackupDate" : "2024-01-02T03:04:05Z",
+  "itemsCompleted" : true,
+  "placesCompleted" : true,
+  "samplesCompleted" : true,
+  "stats" : {
+    "placeCount" : 0,
+    "itemCount" : 0,
+    "sampleCount" : 0
+  }
+}

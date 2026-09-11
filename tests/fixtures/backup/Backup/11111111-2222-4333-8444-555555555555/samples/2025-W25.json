@@ -1,0 +1,38 @@
+[
+  {
+    "id": "C2000000-0000-4000-8000-000000000301",
+    "date": "2025-06-12T07:00:00Z",
+    "source": "LocoKit2",
+    "sourceVersion": "9.0.0",
+    "secondsFromGMT": 7200,
+    "movingState": 0,
+    "recordingState": 2,
+    "disabled": false,
+    "lastSaved": "2025-06-12T08:00:00Z",
+    "timelineItemId": "B4000000-0000-4000-8000-000000000104",
+    "latitude": 51.0499,
+    "longitude": 13.7333,
+    "altitude": 117.0,
+    "horizontalAccuracy": 35.0,
+    "verticalAccuracy": 40.0,
+    "speed": 0.0,
+    "course": null,
+    "stepHz": 0.0,
+    "classifiedActivityType": 1
+  },
+  {
+    "id": "C2000000-0000-4000-8000-000000000302",
+    "date": "2025-06-12T07:01:00Z",
+    "source": "LocoKit2",
+    "sourceVersion": "9.0.0",
+    "secondsFromGMT": null,
+    "movingState": -1,
+    "recordingState": 5,
+    "disabled": false,
+    "lastSaved": "2025-06-12T08:00:00Z",
+    "timelineItemId": null,
+    "latitude": null,
+    "longitude": null,
+    "confirmedActivityType": 99
+  }
+]

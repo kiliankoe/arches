@@ -1,0 +1,120 @@
+[
+  {
+    "base" : {
+      "id" : "B1000000-0000-4000-8000-000000000101",
+      "isVisit" : true,
+      "startDate" : "2025-06-10T08:00:00Z",
+      "endDate" : "2025-06-10T08:20:00Z",
+      "source" : "LocoKit2",
+      "sourceVersion" : "9.0.0",
+      "disabled" : false,
+      "deleted" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "previousItemId" : null,
+      "nextItemId" : "B2000000-0000-4000-8000-000000000102",
+      "samplesChanged" : false,
+      "locked" : false,
+      "stepCount" : 320,
+      "averageHeartRate" : 78.5
+    },
+    "visit" : {
+      "itemId" : "B1000000-0000-4000-8000-000000000101",
+      "latitude" : 51.0403,
+      "longitude" : 13.732,
+      "radiusMean" : 60.0,
+      "radiusSD" : 15.0,
+      "placeId" : "A1000000-0000-4000-8000-000000000001",
+      "confirmedPlace" : true,
+      "uncertainPlace" : false,
+      "customTitle" : null,
+      "streetAddress" : "Wiener Platz 4",
+      "locality" : "Dresden",
+      "countryCode" : "de",
+      "lastSaved" : "2025-06-10T09:58:00Z"
+    }
+  },
+  {
+    "base" : {
+      "id" : "B2000000-0000-4000-8000-000000000102",
+      "isVisit" : false,
+      "startDate" : "2025-06-10T08:20:00Z",
+      "endDate" : "2025-06-10T08:28:00Z",
+      "source" : "LocoKit2",
+      "sourceVersion" : "9.0.0",
+      "disabled" : false,
+      "deleted" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "previousItemId" : "B1000000-0000-4000-8000-000000000101",
+      "nextItemId" : "B3000000-0000-4000-8000-000000000103",
+      "samplesChanged" : false,
+      "locked" : false,
+      "averageAltitude" : 114.0
+    },
+    "trip" : {
+      "itemId" : "B2000000-0000-4000-8000-000000000102",
+      "distance" : 1420.5,
+      "speed" : 2.96,
+      "classifiedActivityType" : 5,
+      "confirmedActivityType" : 24,
+      "uncertainActivityType" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "somethingArcAddedLater" : [1, 2, 3]
+    }
+  },
+  {
+    "base" : {
+      "id" : "B3000000-0000-4000-8000-000000000103",
+      "isVisit" : true,
+      "startDate" : "2025-06-10T08:28:00Z",
+      "endDate" : "2025-06-10T09:00:00Z",
+      "source" : "LocoKit2",
+      "sourceVersion" : "9.0.0",
+      "disabled" : false,
+      "deleted" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "previousItemId" : "B2000000-0000-4000-8000-000000000102",
+      "nextItemId" : "B4000000-0000-4000-8000-000000000104",
+      "samplesChanged" : false,
+      "locked" : false
+    },
+    "visit" : {
+      "itemId" : "B3000000-0000-4000-8000-000000000103",
+      "latitude" : 51.0499,
+      "longitude" : 13.7333,
+      "radiusMean" : 45.0,
+      "radiusSD" : 11.0,
+      "placeId" : "A2000000-0000-4000-8000-000000000002",
+      "confirmedPlace" : false,
+      "uncertainPlace" : true,
+      "customTitle" : "coffee stop",
+      "streetAddress" : null,
+      "lastSaved" : "2025-06-10T09:58:00Z"
+    }
+  },
+  {
+    "base" : {
+      "id" : "B4000000-0000-4000-8000-000000000104",
+      "isVisit" : false,
+      "startDate" : "2025-06-10T09:00:00Z",
+      "endDate" : "2025-06-10T09:10:00Z",
+      "source" : "LocoKit2",
+      "sourceVersion" : "9.0.0",
+      "disabled" : false,
+      "deleted" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "previousItemId" : "B3000000-0000-4000-8000-000000000103",
+      "nextItemId" : null,
+      "samplesChanged" : false,
+      "locked" : false
+    },
+    "trip" : {
+      "itemId" : "B4000000-0000-4000-8000-000000000104",
+      "distance" : 640.0,
+      "speed" : 1.07,
+      "classifiedActivityType" : null,
+      "confirmedActivityType" : 99,
+      "uncertainActivityType" : true,
+      "lastSaved" : "2025-06-10T09:58:00Z"
+    }
+  }
+]

@@ -1,8 +1,8 @@
 # arches
 
-Bridge between Arc Timeline Recorder's iCloud backup and other tools. See
-PLAN.md for the design and phased plan; it is the source of truth for
-decisions in progress.
+Bridge between Arc Timeline Recorder's iCloud backup and other tools. If an
+untracked PLAN.md exists in the checkout, it is the working design and phase
+plan and the source of truth for decisions in progress.
 
 ## Rules
 

@@ -13,8 +13,33 @@ to the data. Everything arches writes goes to `ARCHES_DATA_DIR`, including a
 mirror of the raw bucket files. Tests use a temp dir, never the real folder.
 An accidental write could corrupt Arc's backup chain or trigger a restore.
 
-See [PLAN.md](./PLAN.md) for the full design: data model, API surface and
-phased implementation plan.
+## Arc data format
+
+Arc backs up to `<ARCHES_ARC_DIR>/Backup/<device-uuid>/`, one directory per
+device. When there is more than one, arches uses the device whose backup
+session finished most recently and logs the rest.
+
+```
+Backup/<device-uuid>/
+  metadata.json          schema version, session dates, record counts
+  places/{0-9A-F}.json   places bucketed by the first character of their UUID
+  items/YYYY-MM.json     timeline items by month
+  samples/YYYY-Www.json.gz  location samples by ISO week, usually gzipped
+  notes/                 app extension data, unused here
+```
+
+Places and samples files hold plain arrays; item files hold wrapper objects
+`{ "base": ..., "visit": ... }` or `{ "base": ..., "trip": ... }`. Both
+`.json` and `.json.gz` are accepted everywhere. Null fields are omitted
+rather than emitted, and Arc adds fields between schema versions, so
+`src/arc/types.rs` treats almost everything as optional and never rejects
+unknown fields. Evicted files show up as `.<name>.icloud` placeholders;
+those are skipped and logged.
+
+The format is LocoKit2's bucketed export, specified in
+[docs/export/FORMAT.md](https://github.com/sobri909/LocoKit2/blob/main/docs/export/FORMAT.md).
+Activity, moving and recording states are the integer enums from that repo;
+arches keeps their raw values and renders them by name.
 
 ## Development
 

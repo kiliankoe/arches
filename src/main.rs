@@ -1,4 +1,7 @@
 mod api;
+// Parsing only for now; phase 2's ingest is the first caller.
+#[allow(dead_code)]
+mod arc;
 mod config;
 
 use clap::{Parser, Subcommand};

@@ -276,6 +276,7 @@ async fn geojson_has_a_line_per_trip_and_a_point_per_visit() {
     assert_eq!(kinds, ["Point", "LineString", "Point", "LineString"]);
 
     let point = &features[0];
+    assert_eq!(point["properties"]["date"], DAY);
     assert_eq!(point["properties"]["itemId"], VISIT_ID);
     assert_eq!(point["properties"]["placeId"], HBF_ID);
     assert_eq!(point["properties"]["name"], "Dresden Hauptbahnhof");
@@ -302,6 +303,77 @@ async fn geojson_has_a_line_per_trip_and_a_point_per_visit() {
             .0,
         StatusCode::BAD_REQUEST
     );
+}
+
+/// The range rendering is the union of the days in it, and `/api/days/geojson` is a route of its
+/// own rather than a date that happens to parse.
+#[tokio::test]
+async fn range_geojson_unions_the_days_and_labels_every_feature() {
+    let fixture = Fixture::new();
+
+    let range = fixture
+        .ok("/api/days/geojson?from=2025-06-01&to=2025-06-30")
+        .await;
+
+    assert_eq!(range["type"], "FeatureCollection");
+    let features = range["features"].as_array().unwrap();
+    let first = fixture.ok(&format!("/api/days/{DAY}/geojson")).await;
+    let second = fixture.ok("/api/days/2025-06-12/geojson").await;
+    let expected =
+        first["features"].as_array().unwrap().len() + second["features"].as_array().unwrap().len();
+    assert_eq!(features.len(), expected, "{features:#?}");
+    let dates: Vec<&str> = features
+        .iter()
+        .map(|feature| feature["properties"]["date"].as_str().unwrap())
+        .collect();
+    assert_eq!(dates.iter().filter(|date| **date == DAY).count(), 4);
+    assert!(dates.contains(&"2025-06-12"));
+    assert_eq!(features[0]["properties"]["itemId"], VISIT_ID);
+
+    // A range the recording never reached is an empty collection, not a 404.
+    let empty = fixture
+        .ok("/api/days/geojson?from=2025-07-01&to=2025-07-31")
+        .await;
+    assert!(empty["features"].as_array().unwrap().is_empty(), "{empty}");
+
+    let simplified = fixture
+        .ok("/api/days/geojson?from=2025-06-01&to=2025-06-30&simplify=100")
+        .await;
+    let total = |collection: &Value| -> usize {
+        collection["features"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|feature| match &feature["geometry"]["coordinates"] {
+                Value::Array(coordinates) => coordinates.len(),
+                _ => 0,
+            })
+            .sum()
+    };
+    assert!(total(&simplified) < total(&range));
+}
+
+#[tokio::test]
+async fn range_geojson_rejects_a_missing_or_broken_range() {
+    let fixture = Fixture::new();
+
+    for uri in [
+        "/api/days/geojson",
+        "/api/days/geojson?from=2025-06-01",
+        "/api/days/geojson?to=2025-06-30",
+        "/api/days/geojson?from=someday&to=2025-06-30",
+        "/api/days/geojson?from=2025-06-30&to=2025-06-01",
+        "/api/days/geojson?from=2025-01-01&to=2025-06-30",
+        "/api/days/geojson?from=2025-06-01&to=2025-06-30&simplify=nope",
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert!(body["error"].is_string(), "{uri}: {body}");
+    }
+
+    // Were the literal captured as a date it would 400 on the parse, not on the missing range.
+    let (_, body) = fixture.get("/api/days/geojson").await;
+    assert_eq!(body["error"], "from is required");
 }
 
 #[tokio::test]

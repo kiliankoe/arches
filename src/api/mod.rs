@@ -129,6 +129,9 @@ pub fn router(state: AppState) -> Router {
         .route("/api/config", get(config))
         .route("/api/ingest", post(status::ingest))
         .route("/api/days", get(days::list))
+        // Before the parameter route it shares a shape with: matchit prefers the static segment,
+        // and registering it first says so rather than relying on the reader knowing that.
+        .route("/api/days/geojson", get(days::geojson_range))
         // Also serves `{date}.gpx`: axum captures whole segments only.
         .route("/api/days/{date}", get(days::get))
         .route("/api/days/{date}/geojson", get(days::geojson))

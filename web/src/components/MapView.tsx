@@ -172,10 +172,16 @@ function prefersReducedMotion(): boolean {
 
 /** Keep the framed data out from under the rail, which floats over the map rather than beside it. */
 function framePadding() {
+  // The rail is measured rather than assumed: the day rail is 360 px but the week and month
+  // panels are twice that, and a fit padded for the narrow one lands half its tracks behind
+  // the wide one. Narrow layouts turn the rail into a bottom sheet instead.
+  const rail = document.querySelector<HTMLElement>(".rail, .rail-wide");
   const narrow = window.matchMedia("(max-width: 720px)").matches;
-  return narrow
-    ? { top: 72, right: 24, bottom: window.innerHeight * 0.45 + 24, left: 24 }
-    : { top: 72, right: 32, bottom: 32, left: 392 };
+  if (narrow) {
+    const sheet = rail?.offsetHeight ?? window.innerHeight * 0.45;
+    return { top: 72, right: 24, bottom: sheet + 24, left: 24 };
+  }
+  return { top: 72, right: 32, bottom: 32, left: (rail?.offsetWidth ?? 360) + 32 };
 }
 
 function boundsOf([minLon, minLat, maxLon, maxLat]: Bbox): LngLatBoundsLike {

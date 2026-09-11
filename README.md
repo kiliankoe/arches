@@ -282,7 +282,8 @@ with no auth and pensieve's browser frontend fetches from it directly.
 | `POST /api/ingest` | Runs one pass now and returns its summary; queues behind the periodic one. |
 | `GET /api/days?from=&to=` | Day summaries in an inclusive range, default the last 30 days, at most 400. Days with no row are absent. |
 | `GET /api/days/{date}` | The day's summary plus its items in start order, each with the seconds it spent inside that day. |
-| `GET /api/days/{date}/geojson?simplify=` | FeatureCollection: a LineString per trip from its fixes, a Point per visit. |
+| `GET /api/days/{date}/geojson?simplify=` | FeatureCollection: a LineString per trip from its fixes, a Point per visit, every feature carrying its local `date`. |
+| `GET /api/days/geojson?from=&to=&simplify=` | The same rendering over an inclusive range, every day in one FeatureCollection. `from` and `to` are required and at most 62 days apart; days with no row contribute nothing, so an empty range is an empty collection rather than a 404. |
 | `GET /api/days/{date}.gpx` | GPX 1.1, a `<wpt>` per visit and a `<trk>` per trip. |
 | `GET /api/items/{id}` | One item, with its place if it is a visit. |
 | `GET /api/items/{id}/samples?simplify=` | The item's fixes in time order. |
@@ -327,6 +328,11 @@ becomes a bottom sheet.
 | `/place/{id}` | One place, its address and counts, and its visits newest first. |
 | `/heat?from=&to=&weight=` | The heatmap over a range of days, with presets, two date inputs and a days/samples toggle. Both travel in the URL. |
 | `/highlights?from=&to=` | The notable events of a range, grouped by month, each linking to its day; an unconfirmed one is marked with a dashed rule. |
+
+The week and month views frame their range and draw it too: both ask
+`/api/days/geojson` for the whole range as one collection, simplified to 15 m
+and 25 m respectively, and the month drops the visit points because a few
+hundred of them at that zoom read as a carpet rather than as places.
 
 Every route deep-links; unknown paths fall back to the shell, so the browser's
 address bar is a usable input. In the day view the left and right arrow keys

@@ -11,8 +11,11 @@ use super::error::{ApiError, ApiResult};
 use super::{AppState, days, model};
 use crate::geo::simplify_indices;
 
+/// Two months of geometry is already more than a map shows at once; a wider window is a scrape.
+const MAX_RANGE_DAYS: i64 = 62;
+
 pub async fn day(state: &AppState, date: Date, simplify_m: Option<f64>) -> ApiResult<Json<Value>> {
-    let collection = state
+    let features = state
         .db
         .read(move |conn| {
             if !days::summary_exists(conn, &date)? {
@@ -22,13 +25,52 @@ pub async fn day(state: &AppState, date: Date, simplify_m: Option<f64>) -> ApiRe
         })
         .await?;
 
-    match collection {
-        Some(collection) => Ok(Json(collection)),
+    match features {
+        Some(features) => Ok(Json(collection(features))),
         None => Err(ApiError::not_found(format!("no summary for {date}"))),
     }
 }
 
-fn render(conn: &Connection, date: &str, simplify_m: Option<f64>) -> Result<Value> {
+/// Every day of an inclusive range in one collection, for a view that frames a week or a month
+/// and wants the tracks behind it. A day with no summary contributes nothing, so a gap in the
+/// recording is simply absent rather than an error.
+pub async fn range(
+    state: &AppState,
+    from: Date,
+    to: Date,
+    simplify_m: Option<f64>,
+) -> ApiResult<Json<Value>> {
+    if from > to {
+        return Err(ApiError::bad_request("from must not be after to"));
+    }
+    let span = from.until(to).map_or(0, |span| span.get_days() as i64) + 1;
+    if span > MAX_RANGE_DAYS {
+        return Err(ApiError::bad_request(format!(
+            "range of {span} days is longer than the {MAX_RANGE_DAYS} day maximum"
+        )));
+    }
+
+    let features = state
+        .db
+        .read(move |conn| {
+            let dates = days::summary_dates_in(conn, &from.to_string(), &to.to_string())?;
+            let mut features = Vec::new();
+            for date in &dates {
+                features.extend(render(conn, date, simplify_m)?);
+            }
+            Ok(features)
+        })
+        .await?;
+    Ok(Json(collection(features)))
+}
+
+fn collection(features: Vec<Value>) -> Value {
+    json!({ "type": "FeatureCollection", "features": features })
+}
+
+/// Every feature carries its `date`, which is what lets a client that asked for a range tell one
+/// day's geometry from the next.
+fn render(conn: &Connection, date: &str, simplify_m: Option<f64>) -> Result<Vec<Value>> {
     let items = model::items_on(conn, date)?;
     let places = model::places_of(conn, &items)?;
     let mut samples = model::day_samples(conn, date)?;
@@ -46,6 +88,7 @@ fn render(conn: &Connection, date: &str, simplify_m: Option<f64>) -> Result<Valu
                 "type": "Feature",
                 "geometry": { "type": "Point", "coordinates": [longitude, latitude] },
                 "properties": {
+                    "date": date,
                     "itemId": item.id,
                     "placeId": item.visit_place_id,
                     "name": place.map(|place| place.name.clone()),
@@ -79,6 +122,7 @@ fn render(conn: &Connection, date: &str, simplify_m: Option<f64>) -> Result<Valu
             "type": "Feature",
             "geometry": { "type": "LineString", "coordinates": coordinates },
             "properties": {
+                "date": date,
                 "itemId": item.id,
                 "activityType": item.activity_type(),
                 "startDate": rfc3339(item.start_date),
@@ -90,5 +134,5 @@ fn render(conn: &Connection, date: &str, simplify_m: Option<f64>) -> Result<Valu
         }));
     }
 
-    Ok(json!({ "type": "FeatureCollection", "features": features }))
+    Ok(features)
 }

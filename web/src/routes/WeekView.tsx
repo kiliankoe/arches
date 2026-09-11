@@ -5,7 +5,7 @@ import { Link, useParams } from "react-router";
 import { ApiError, api, type Day, errorMessage } from "../api";
 import Rail from "../components/Rail";
 import TopBar from "../components/TopBar";
-import { useResource } from "../hooks";
+import { useRangeGeoJson, useResource } from "../hooks";
 import { activityColor, activityLabel } from "../lib/activity";
 import { unionBbox } from "../lib/bbox";
 import { addWeeks, isoWeekDates, isoWeekOf, isWeek, today } from "../lib/dates";
@@ -18,6 +18,9 @@ import {
   minutesFromMidnight,
 } from "../lib/format";
 import { useScene } from "../scene";
+
+/** The map is context at the scale of a week, so the tracks are smoothed to stay legible. */
+const SIMPLIFY_M = 15;
 
 const HOUR_LABELS = [0, 6, 12, 18];
 const GRIDLINES = [6, 12, 18];
@@ -32,13 +35,15 @@ export default function WeekView() {
     Promise.all(dates.map((date) => api.day(date).catch(missingIsNull))),
   );
 
+  const geojson = useRangeGeoJson(dates[0] ?? null, dates[6] ?? null, SIMPLIFY_M);
+
   const scene = useMemo(
     () => ({
-      geojson: null,
+      geojson,
       pins: [],
       fit: unionBbox((days.data ?? []).map((day) => day?.summary.bbox)),
     }),
-    [days.data],
+    [geojson, days.data],
   );
   useScene(scene);
 

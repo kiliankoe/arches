@@ -128,6 +128,8 @@ export type DayFeature = {
     | { type: "LineString"; coordinates: [number, number][] }
     | { type: "Point"; coordinates: [number, number] };
   properties: {
+    /** The local day the item was drawn under, which is what tells days apart in a range. */
+    date: string;
     itemId: string;
     activityType?: string | null;
     placeId?: string | null;
@@ -203,6 +205,9 @@ export type HighlightQuery = {
   confirmed?: boolean;
 };
 
+/** At most 62 days: beyond that the server refuses rather than rendering a quarter of geometry. */
+export type RangeGeoJsonQuery = { from: string; to: string; simplify?: number };
+
 export type HeatQuery = {
   bbox: Bbox;
   zoom: number;
@@ -263,6 +268,8 @@ export const api = {
   day: (date: string) => request<Day>(`/days/${date}`),
   dayGeoJson: (date: string, simplify?: number) =>
     request<DayGeoJson>(`/days/${date}/geojson${query({ simplify })}`),
+  rangeGeoJson: ({ from, to, simplify }: RangeGeoJsonQuery, signal?: AbortSignal) =>
+    request<DayGeoJson>(`/days/geojson${query({ from, to, simplify })}`, { signal }),
   place: (id: string) => request<Place>(`/places/${encodeURIComponent(id)}`),
   placeVisits: (id: string, limit?: number) =>
     request<Item[]>(`/places/${encodeURIComponent(id)}/visits${query({ limit })}`),

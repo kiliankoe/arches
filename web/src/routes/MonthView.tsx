@@ -5,14 +5,18 @@ import { Link, useParams } from "react-router";
 import { api, type DaySummary, errorMessage } from "../api";
 import Rail from "../components/Rail";
 import TopBar from "../components/TopBar";
-import { useResource } from "../hooks";
+import { useRangeGeoJson, useResource } from "../hooks";
 import { activityColor } from "../lib/activity";
 import { unionBbox } from "../lib/bbox";
 import { addMonths, isMonth, monthEnd, monthGrid, monthOf, monthStart, today } from "../lib/dates";
 import { formatDistance, formatMonthTitle } from "../lib/format";
+import { tracksOnly } from "../lib/tracks";
 import { useScene } from "../scene";
 
 const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+/** A month frames a region rather than a city, so the tracks are smoothed harder than a week's. */
+const SIMPLIFY_M = 25;
 
 export default function MonthView() {
   const { month = "" } = useParams();
@@ -28,13 +32,20 @@ export default function MonthView() {
     return map;
   }, [days.data]);
 
+  const loaded = useRangeGeoJson(
+    valid ? monthStart(month) : null,
+    valid ? monthEnd(month) : null,
+    SIMPLIFY_M,
+  );
+  const geojson = useMemo(() => tracksOnly(loaded), [loaded]);
+
   const scene = useMemo(
     () => ({
-      geojson: null,
+      geojson,
       pins: [],
       fit: unionBbox((days.data ?? []).map((day) => day.bbox)),
     }),
-    [days.data],
+    [geojson, days.data],
   );
   useScene(scene);
 

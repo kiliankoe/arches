@@ -178,6 +178,25 @@ pub async fn geojson(
     .await
 }
 
+/// `/api/days/geojson`: `from` and `to` are both required, so the literal never reads as a date.
+pub async fn geojson_range(
+    State(state): State<AppState>,
+    Query(params): Query<HashMap<String, String>>,
+) -> ApiResult<Json<Value>> {
+    let required = |name: &str| {
+        params
+            .get(name)
+            .ok_or_else(|| ApiError::bad_request(format!("{name} is required")))
+    };
+    geojson::range(
+        &state,
+        parse_date(required("from")?)?,
+        parse_date(required("to")?)?,
+        super::simplify_tolerance(&params)?,
+    )
+    .await
+}
+
 fn summary(conn: &Connection, date: &str) -> Result<Option<DaySummary>> {
     Ok(conn
         .query_row(
@@ -198,6 +217,15 @@ fn summaries_in(conn: &Connection, from: &str, to: &str) -> Result<Vec<DaySummar
         .query_map(params![from, to], DaySummary::from_row)?
         .collect::<Result<_, _>>()?;
     Ok(summaries)
+}
+
+/// The dates in a range that have a summary, for a rendering that spans several days.
+pub fn summary_dates_in(conn: &Connection, from: &str, to: &str) -> Result<Vec<String>> {
+    let dates = conn
+        .prepare("SELECT date FROM day_summaries WHERE date >= ? AND date <= ? ORDER BY date")?
+        .query_map(params![from, to], |row| row.get(0))?
+        .collect::<Result<_, _>>()?;
+    Ok(dates)
 }
 
 /// The date a day summary exists for, for the GPX and GeoJSON renderings to 404 on.

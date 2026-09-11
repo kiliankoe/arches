@@ -38,6 +38,7 @@ macro_rules! raw_int_enum {
 
         impl $name {
             /// Every case upstream declares, in raw value order. Handy for exhaustive tests.
+            #[allow(dead_code, reason = "phase 4 renders enum names in the API")]
             pub const ALL: &'static [$name] = &[$($name::$variant),+];
 
             pub fn from_raw(raw: i32) -> Self {
@@ -143,6 +144,7 @@ raw_int_enum! {
 impl ActivityType {
     /// Mirrors upstream `isMovingType`: an unknown future case is assumed to be movement, since
     /// the only non-moving cases are the three that mean "not going anywhere".
+    #[allow(dead_code, reason = "phase 3 splits distance by moving type")]
     pub fn is_moving_type(self) -> bool {
         !matches!(
             self,

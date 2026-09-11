@@ -211,7 +211,6 @@ mod tests {
     use crate::arc::enums::{ActivityType, MovingState, RecordingState};
 
     const NEWER_DEVICE: &str = "11111111-2222-4333-8444-555555555555";
-    const OLDER_DEVICE: &str = "99999999-8888-4777-8666-555555555555";
 
     fn fixture_arc_dir() -> PathBuf {
         PathBuf::from(concat!(

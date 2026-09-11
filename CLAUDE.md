@@ -26,6 +26,8 @@ cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
 cargo run -- serve
+cargo run -- ingest          # one ingest pass; set ARCHES_DATA_DIR to a temp dir when trying it
+cargo run -- status --json
 ```
 
 Frontend:

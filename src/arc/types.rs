@@ -86,10 +86,12 @@ pub struct TimelineItem {
 }
 
 impl TimelineItem {
+    #[allow(dead_code, reason = "phase 3 keys derived day data by item id")]
     pub fn id(&self) -> &str {
         &self.base.id
     }
 
+    #[allow(dead_code, reason = "phase 3 keys derived day data by item id")]
     pub fn is_visit(&self) -> bool {
         self.base.is_visit
     }

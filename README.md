@@ -41,6 +41,53 @@ The format is LocoKit2's bucketed export, specified in
 Activity, moving and recording states are the integer enums from that repo;
 arches keeps their raw values and renders them by name.
 
+## Ingest
+
+`arches ingest` runs one pass over the backup and `arches status` (or
+`arches status --json`) reports what it left behind:
+
+```
+arches ingest
+arches status
+```
+
+A pass discovers the newest device backup, lists the places, items and sample
+buckets and compares each file's mtime and size against the `ingest_files`
+table. Unchanged files are skipped. A changed file is first copied into
+`<ARCHES_DATA_DIR>/raw/<device-uuid>/<bucket path>` by writing a temp file
+next to the destination and renaming it, so the mirror is never partial, then
+parsed from the mirrored copy. Parsing the copy rather than the original means
+an iCloud-evicted file is downloaded exactly once per change, and the mirror
+doubles as an off-iCloud backup of the raw buckets. A copy that takes longer
+than three seconds is logged with its elapsed time, since a first run is
+mostly spent waiting for iCloud.
+
+Records are upserted in one transaction per file, guarded on `lastSaved`, so
+an older rendering of a record never overwrites a newer one and re-ingesting
+a file is free. Nothing is ever deleted; Arc marks removals with `deleted`.
+The `ingest_files` row is written in the same transaction as the records, so
+a crash re-ingests the file instead of losing it. A file that fails to parse
+is logged, recorded in the run's `error` column and left un-ingested; the
+other files still go in, and `arches ingest` exits non-zero.
+
+Timestamps are stored as unix milliseconds and booleans as 0/1, so every
+column is a plain integer.
+
+Observed on cassini in September 2026, over three years of recording (183
+bucket files: 16 place buckets, 32 item months, 135 sample weeks):
+
+| | first run | second run |
+| --- | --- | --- |
+| wall time | 353.5 s | 0.02 s |
+| files ingested | 183 | 0 |
+| records upserted | 1134 places, 13 831 items, 2 576 927 samples | none |
+
+That first run was almost entirely iCloud: 17 s of user and 24 s of system
+time against six minutes of wall clock, with 43 buckets logged as slow copies
+while iCloud fetched them. No file failed to parse. The result is a 746 MiB
+database and a 328 MiB raw mirror, and every later run that finds nothing
+changed costs milliseconds.
+
 ## Development
 
 This project uses a Nix flake and direnv:

@@ -24,6 +24,10 @@ impl Config {
         Self::from_pairs(std::env::vars())
     }
 
+    pub fn db_path(&self) -> PathBuf {
+        self.data_dir.join("arches.db")
+    }
+
     /// Core loader, parameterized over an env-like source instead of touching the process
     /// environment directly, so tests can exercise overrides without racing global state.
     pub fn from_pairs<I, K, V>(pairs: I) -> anyhow::Result<Self>

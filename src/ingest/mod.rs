@@ -1,8 +1,11 @@
-//! One ingest pass over Arc's backup: mirror changed bucket files into the data dir, upsert
-//! their records, and record what happened in `ingest_files` and `ingest_runs`.
+//! One ingest pass over the sources: mirror changed files into the data dir, upsert their
+//! records, and record what happened in `ingest_files` and `ingest_runs`.
 //!
-//! Arc's folder is only ever read: see README.md.
+//! Two sources land in the same tables, Arc's bucketed backup and an optional directory of
+//! daily GPX files (`ARCHES_GPX_DIR`, see `gpx.rs`). Both folders are only ever read: see
+//! README.md.
 
+mod gpx;
 mod mirror;
 mod upsert;
 
@@ -117,7 +120,36 @@ pub fn run(conn: &mut Connection, config: &Config) -> Result<RunSummary> {
     Ok(summary)
 }
 
+/// Each source is ingested independently: a missing Arc folder or an unreadable GPX directory
+/// is recorded against the run and the other source still goes in. Only derivation, which needs
+/// whatever both of them touched, runs once at the end.
 fn ingest_all(conn: &mut Connection, config: &Config, state: &mut RunState) -> Result<()> {
+    if let Err(error) = ingest_arc(conn, config, state) {
+        tracing::error!(
+            arc_dir = %config.arc_dir.display(),
+            error = %format!("{error:#}"),
+            "Arc ingest failed"
+        );
+        state.errors.push(format!("arc: {error:#}"));
+    }
+
+    if let Some(dir) = &config.gpx_dir
+        && let Err(error) = gpx::ingest(conn, config, dir, state)
+    {
+        tracing::error!(
+            gpx_dir = %dir.display(),
+            error = %format!("{error:#}"),
+            "GPX ingest failed"
+        );
+        state.errors.push(format!("gpx: {error:#}"));
+    }
+
+    // Derivation runs once for the whole pass rather than per file: a trip's item bucket and
+    // its sample buckets are separate files, and only the union of them is a complete picture.
+    derive_touched(conn, state)
+}
+
+fn ingest_arc(conn: &mut Connection, config: &Config, state: &mut RunState) -> Result<()> {
     let backup = Backup::discover(&config.arc_dir)?;
     let metadata = backup.metadata()?;
     state.device_id = Some(backup.device_id.clone());
@@ -134,7 +166,7 @@ fn ingest_all(conn: &mut Connection, config: &Config, state: &mut RunState) -> R
     let mut files = backup.place_files()?;
     files.extend(backup.item_files()?);
     files.extend(backup.sample_files()?);
-    state.counters.files_seen = files.len() as i64;
+    state.counters.files_seen += files.len() as i64;
 
     for file in &files {
         match ingest_file(conn, config, &backup.device_id, file, state) {
@@ -148,10 +180,7 @@ fn ingest_all(conn: &mut Connection, config: &Config, state: &mut RunState) -> R
             }
         }
     }
-
-    // Derivation runs once for the whole pass rather than per file: a trip's item bucket and
-    // its sample buckets are separate files, and only the union of them is a complete picture.
-    derive_touched(conn, state)
+    Ok(())
 }
 
 fn derive_touched(conn: &mut Connection, state: &mut RunState) -> Result<()> {
@@ -378,7 +407,7 @@ mod tests {
 
     /// The fixtures are checked in read-only in spirit: every test works on a copy so it can
     /// rewrite buckets and bump mtimes without touching the tree in git.
-    fn copy_tree(from: &Path, to: &Path) {
+    pub(super) fn copy_tree(from: &Path, to: &Path) {
         fs::create_dir_all(to).unwrap();
         for entry in fs::read_dir(from).unwrap() {
             let entry = entry.unwrap();

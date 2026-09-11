@@ -9,8 +9,9 @@ Arc's iCloud folder (`Documents/Backup/<device-uuid>/`, the LocoKit2
 bucketed export format) is the source of truth and is **read-only** for
 arches, without exception: files are opened read-only, nothing is ever
 created, renamed, touched or deleted in there, and no temp files land next
-to the data. Everything arches writes goes to `ARCHES_DATA_DIR`, including a
-mirror of the raw bucket files. Tests use a temp dir, never the real folder.
+to the data. The same goes for `ARCHES_GPX_DIR`, the optional second source
+below. Everything arches writes goes to `ARCHES_DATA_DIR`, including a
+mirror of the raw files. Tests use a temp dir, never the real folder.
 An accidental write could corrupt Arc's backup chain or trigger a restore.
 
 ## Arc data format
@@ -68,7 +69,10 @@ a file is free. Nothing is ever deleted; Arc marks removals with `deleted`.
 The `ingest_files` row is written in the same transaction as the records, so
 a crash re-ingests the file instead of losing it. A file that fails to parse
 is logged, recorded in the run's `error` column and left un-ingested; the
-other files still go in, and `arches ingest` exits non-zero.
+other files still go in, and `arches ingest` exits non-zero. The same holds
+between sources: a pass ingests Arc and then the GPX history below, and a
+folder that is missing or unreadable costs its own source and nothing else.
+Derivation runs once at the end, over whatever both of them touched.
 
 Timestamps are stored as unix milliseconds and booleans as 0/1, so every
 column is a plain integer.
@@ -87,6 +91,104 @@ time against six minutes of wall clock, with 43 buckets logged as slow copies
 while iCloud fetched them. No file failed to parse. The result is a 746 MiB
 database and a 328 MiB raw mirror, and every later run that finds nothing
 changed costs milliseconds.
+
+## GPX history
+
+Arc is not the only recording there has ever been. `ARCHES_GPX_DIR` points at a
+directory of daily GPX files, and they land in the same tables as the backup, so
+the day views, the heatmap and the highlights treat both as one timeline and
+never learn there are two sources beyond the `source` column. The directory is
+**read-only** the same way Arc's folder is: files are opened to read, copied
+into `<ARCHES_DATA_DIR>/raw/gpx/<file name>`, and parsed from that copy. With
+the variable unset nothing GPX-related runs at all.
+
+The shape accepted is the one Arc's own daily exports have, which is what the
+quantified-map-gpx script writes when it renders thirteen years of Quantified
+Map history: one file per UTC day named `YYYY-MM-DD.gpx`, holding `<trk>` and
+`<wpt>` elements interleaved in chronological order, all times UTC. Parsing is
+streaming (quick-xml, no document tree), and unknown elements and attributes are
+ignored rather than rejected: the files are an archive nobody is going to
+regenerate to suit us.
+
+| GPX | arches |
+| --- | --- |
+| the `creator` attribute | the `source` of every row the directory produces (`quantified-map-gpx`; Arc's own is `LocoKit2`) |
+| `<trk>` | a trip item, its fixes summed with haversine into `trip_distance` and divided by the duration into `trip_speed` |
+| `<type>` | the activity type, confirmed: a type Arc has a case for is what the timeline recorded, not a guess made now |
+| `<type>transport` | classified as `car`, unconfirmed and uncertain. Quantified Map's word for "motorised, and that is all I know" |
+| `<type>unknown`, or a word Arc has no case for | classified `unknown`, unconfirmed and uncertain |
+| `<trkpt>` | a sample, moving and recording, with `<ele>` as its altitude |
+| `<wpt>` | a visit item, plus one sample at the waypoint so the item has an offset and a position |
+| `<wpt><name>` | a place, keyed on the name. `Unnamed Visit` gets none and stays unconfirmed |
+
+A track with fewer than two timed fixes is dropped rather than written as a
+one-point trip; it is a sliver at a segment boundary or a midnight split.
+
+GPX carries no ids and ingest has to be an upsert, so an id is a hash of
+`(source, kind, key)` rendered as a version 8 UUID, the same shape Arc's own
+records have. Trips and their fixes are keyed on the file name and the element
+index, visits on their name and start time, places on the name alone. The hash
+is FNV-1a rather than `std::hash`, whose `DefaultHasher` is explicitly not
+stable across Rust releases: an id that changed with the compiler would fork the
+whole archive. Re-exporting the directory therefore upserts in place, and a file
+whose mtime and size have not moved is skipped like an Arc bucket.
+
+Visits are where the UTC day boundary shows. A `<wpt>` carries the start of a
+visit and nothing else, so it ends when the next element in the stream starts,
+which for the last waypoint of a file means peeking into the files after it. A
+visit spanning midnight is written to both files with the same name and start
+time, and since the id is that pair, both copies are one item; the second copy's
+end, which knows what followed, wins. The end is capped at 24 hours: where the
+export has a gap the next element can be months later (458 of the 2087 visits at
+the end of a file, the longest by 418 days), and a recording stopping is not the
+same as a visit going on. The last visit of the whole directory, with nothing
+after it at all, gets an hour.
+
+Arc wins where the two sources meet. Any GPX file whose day is on or after the
+first day a non-GPX item starts is skipped with a warning naming it and is not
+recorded in `ingest_files`, so re-exporting a history that now overlaps the
+backup can never bury the better recording. Arc has real ids, accuracies and
+confirmed places; the import has none of that. The day is compared in UTC, which
+errs towards skipping a file whose evening already belongs to Arc.
+
+GPX timestamps are all UTC, but every day in this database is a local day. The
+coordinate gives an IANA zone (tzf-rs, boundary data bundled into the binary, no
+network) and the zone gives the offset at that instant (jiff, system tzdb), which
+is what makes a summer day in Dresden come out at +2 and the winter either side
+of it at +1. Lookups are cached per coordinate rounded to two decimals, about a
+kilometre, since a day's fixes are almost all in one zone.
+
+Places are rewritten at the end of the pass from every visit in the database
+rather than from the ones the run happened to touch, so re-ingesting one changed
+file cannot leave the other counts stale. The position is the mean of the
+waypoints that carried the name, `visitDays` counts distinct local days, and the
+offset is the zone at that mean position on the last visit: one static offset per
+place, which is the approximation Arc's own places carry too.
+
+What GPX does not have: accuracies, speed, course, step counts and heart rates,
+street addresses, localities, country codes and place radii. Those columns stay
+NULL rather than being invented from the geometry. That is also why the imported
+years produce no "first time in a country" or "first time in a town" highlights:
+those are derived from a day summary's country codes and localities, and the
+export carries neither. Flights and longest trips do work, since they come from
+the trips themselves.
+
+Observed on cassini in September 2026, over 2380 files and 266 MB of
+quantified-map export covering 2010-08-08 to 2023-10-07, into an empty data dir:
+
+| | first run | second run |
+| --- | --- | --- |
+| wall time | 69.7 s (42 s over the files, 28 s derivation) | 0.04 s |
+| files ingested | 2380 | 0 |
+| records upserted | 1466 places, 28 504 items, 1 773 433 samples | none |
+| days recomputed | 2465 | 0 |
+
+Those upserts land on 27 366 items: the difference is the visits that span UTC
+midnight and are written from both of the files that hold them. Parsing is
+streaming and the database work is one transaction per file, so the process
+peaks at 235 MB whatever the size of the archive, of which about 30 MB is the
+timezone boundary index. The result is a 1.4 GiB database, most of it heatmap
+cells, next to the 266 MB mirror of the files themselves.
 
 ## Derived data
 
@@ -277,7 +379,7 @@ with no auth and pensieve's browser frontend fetches from it directly.
 
 | Endpoint | |
 | --- | --- |
-| `GET /api/status` | Version, last ingest run, Arc's `lastBackupDate`, newest bucket mtime, row counts, summarized date range and whether a pass is running. |
+| `GET /api/status` | Version, last ingest run, Arc's `lastBackupDate`, newest bucket mtime, row counts, `bySource` (items and samples per `source`, with that source's first and last item), summarized date range and whether a pass is running. `bySource` counts samples through an index, which is about 0.2 s over four million of them. |
 | `GET /api/config` | The MapLibre style URL the frontend renders with. |
 | `POST /api/ingest` | Runs one pass now and returns its summary; queues behind the periodic one. |
 | `GET /api/days?from=&to=` | Day summaries in an inclusive range, default the last 30 days, at most 400. Days with no row are absent. |
@@ -436,6 +538,7 @@ All configuration is via environment variables:
 | Variable                 | Default                                                                              | Meaning                                    |
 | ------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------- |
 | `ARCHES_ARC_DIR`          | `~/Library/Mobile Documents/iCloud~com~bigpaua~Arc-Timeline-Editor/Documents`          | Arc's iCloud `Documents` dir. Read-only.   |
+| `ARCHES_GPX_DIR`          | none                                                                                   | Directory of daily GPX files to ingest as history. Read-only. Unset means no GPX ingest at all. |
 | `ARCHES_DATA_DIR`         | `~/Library/Application Support/arches`                                                | Where arches writes its database and raw mirror. |
 | `ARCHES_BIND`             | `127.0.0.1:8471`                                                                       | Address the HTTP API binds to.             |
 | `ARCHES_MAP_STYLE`        | `https://tiles.openfreemap.org/styles/liberty`                                        | MapLibre style URL served to the frontend. |

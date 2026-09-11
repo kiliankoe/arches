@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" xmlns="http://www.topografix.com/GPX/1/1" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" creator="quantified-map-gpx">
+  <trk>
+    <name>Walking</name>
+    <type>walking</type>
+    <trkseg>
+      <trkpt lat="51.0403" lon="13.7320">
+        <time>2025-06-10T08:00:00Z</time>
+      </trkpt>
+      <trkpt lat="51.0452" lon="13.7330">
+        <time>2025-06-10T08:05:00Z</time>
+      </trkpt>
+    </trkseg>
+  </trk>
+  <wpt lat="51.0570" lon="13.7400">
+    <time>2025-06-10T08:05:00Z</time>
+    <name>Neust&#xE4;dter Markt</name>
+  </wpt>
+</gpx>

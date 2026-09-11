@@ -1,5 +1,7 @@
 //! What the database has to say about itself: the last ingest run and what it left behind.
 
+use std::collections::HashMap;
+
 use anyhow::Result;
 use rusqlite::{Connection, OptionalExtension};
 use serde::Serialize;
@@ -16,6 +18,20 @@ pub struct Status {
     pub first_summarized_date: Option<String>,
     pub last_summarized_date: Option<String>,
     pub last_ingested_at: Option<i64>,
+    /// How much of the database each source contributed, most items first. Arc's own recording
+    /// is `LocoKit2`; imported GPX history carries the creator string of its files.
+    pub by_source: Vec<SourceCounts>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceCounts {
+    /// `None` for rows old enough to predate the column.
+    pub source: Option<String>,
+    pub items: i64,
+    pub samples: i64,
+    pub first_item_start: Option<i64>,
+    pub last_item_start: Option<i64>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -114,7 +130,48 @@ pub fn status(conn: &Connection) -> Result<Status> {
         first_summarized_date,
         last_summarized_date,
         last_ingested_at,
+        by_source: by_source(conn)?,
     })
+}
+
+/// Items and samples per source. The two are counted separately rather than joined: a sample
+/// carries its own source, and joining millions of them to their items to find out would cost
+/// far more than a status call is worth.
+fn by_source(conn: &Connection) -> Result<Vec<SourceCounts>> {
+    let mut samples: HashMap<Option<String>, i64> = conn
+        .prepare("SELECT source, count(*) FROM samples GROUP BY source")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+
+    let mut by_source: Vec<SourceCounts> = conn
+        .prepare(
+            "SELECT source, count(*), min(start_date), max(start_date)
+             FROM items GROUP BY source",
+        )?
+        .query_map([], |row| {
+            Ok(SourceCounts {
+                source: row.get(0)?,
+                items: row.get(1)?,
+                samples: 0,
+                first_item_start: row.get(2)?,
+                last_item_start: row.get(3)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+
+    for counts in &mut by_source {
+        counts.samples = samples.remove(&counts.source).unwrap_or(0);
+    }
+    // A source with samples but no items at all still has to show up.
+    by_source.extend(samples.into_iter().map(|(source, samples)| SourceCounts {
+        source,
+        items: 0,
+        samples,
+        first_item_start: None,
+        last_item_start: None,
+    }));
+    by_source.sort_by(|a, b| b.items.cmp(&a.items).then_with(|| a.source.cmp(&b.source)));
+    Ok(by_source)
 }
 
 #[cfg(test)]
@@ -133,6 +190,41 @@ mod tests {
         assert_eq!(status.counts.day_summaries, 0);
         assert!(status.first_summarized_date.is_none());
         assert!(status.last_ingested_at.is_none());
+    }
+
+    #[test]
+    fn counts_rows_per_source() {
+        let conn = db::open_in_memory().unwrap();
+        conn.execute(
+            "INSERT INTO items (id, is_visit, start_date, end_date, last_saved, source) VALUES
+                 ('a', 0, 10, 20, 0, 'LocoKit2'),
+                 ('b', 0, 30, 40, 0, 'LocoKit2'),
+                 ('c', 1, 5, 8, 0, 'quantified-map-gpx')",
+            [],
+        )
+        .unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, date, last_saved, source) VALUES
+                 ('s1', 10, 0, 'LocoKit2'),
+                 ('s2', 5, 0, 'quantified-map-gpx'),
+                 ('s3', 6, 0, 'quantified-map-gpx'),
+                 ('s4', 7, 0, NULL)",
+            [],
+        )
+        .unwrap();
+
+        let by_source = status(&conn).unwrap().by_source;
+
+        assert_eq!(by_source.len(), 3);
+        assert_eq!(by_source[0].source.as_deref(), Some("LocoKit2"));
+        assert_eq!((by_source[0].items, by_source[0].samples), (2, 1));
+        assert_eq!(by_source[0].first_item_start, Some(10));
+        assert_eq!(by_source[0].last_item_start, Some(30));
+        assert_eq!(by_source[1].source.as_deref(), Some("quantified-map-gpx"));
+        assert_eq!((by_source[1].items, by_source[1].samples), (1, 2));
+        // A sample from before the column existed still has to be counted somewhere.
+        assert_eq!(by_source[2].source, None);
+        assert_eq!((by_source[2].items, by_source[2].samples), (0, 1));
     }
 
     #[test]

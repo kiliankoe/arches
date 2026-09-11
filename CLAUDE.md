@@ -6,10 +6,11 @@ plan and the source of truth for decisions in progress.
 
 ## Rules
 
-- Arc's iCloud folder (`ARCHES_ARC_DIR`) is **read-only**, without exception.
-  Never open it for writing, never create or delete anything in it. Tests
-  that touch Arc-shaped data must use a temp dir (`tempfile`), never the
-  real folder.
+- Arc's iCloud folder (`ARCHES_ARC_DIR`) and the GPX history directory
+  (`ARCHES_GPX_DIR`) are **read-only**, without exception. Never open either
+  for writing, never create or delete anything in them. Tests that touch
+  Arc-shaped or GPX data must use a temp dir (`tempfile`), never the real
+  folders.
 - Frontend package manager is pnpm, never npm.
 - Stack mirrors the sibling project pensieve: Rust 2024, axum, tokio,
   rusqlite (bundled, phase 2+), serde, tracing, anyhow; React 19, Vite,

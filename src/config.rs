@@ -15,6 +15,9 @@ const DEFAULT_INGEST_INTERVAL: &str = "15m";
 pub struct Config {
     /// Arc's iCloud `Documents` dir. Read-only, without exception: see PLAN.md.
     pub arc_dir: PathBuf,
+    /// A directory of daily GPX files to ingest alongside Arc, read-only the same way. No
+    /// default: unset means nothing GPX-related runs at all.
+    pub gpx_dir: Option<PathBuf>,
     pub data_dir: PathBuf,
     pub bind: String,
     pub map_style: String,
@@ -51,6 +54,9 @@ impl Config {
                 &get("ARCHES_ARC_DIR").unwrap_or_else(|| DEFAULT_ARC_DIR.to_string()),
                 home.as_deref(),
             ),
+            gpx_dir: get("ARCHES_GPX_DIR")
+                .filter(|dir| !dir.trim().is_empty())
+                .map(|dir| expand_home(&dir, home.as_deref())),
             data_dir: expand_home(
                 &get("ARCHES_DATA_DIR").unwrap_or_else(|| DEFAULT_DATA_DIR.to_string()),
                 home.as_deref(),
@@ -118,6 +124,7 @@ mod tests {
             config.data_dir,
             PathBuf::from("/home/kilian/Library/Application Support/arches")
         );
+        assert_eq!(config.gpx_dir, None);
         assert_eq!(config.bind, "127.0.0.1:8471");
         assert_eq!(
             config.map_style,
@@ -131,6 +138,7 @@ mod tests {
         let config = config(&[
             ("HOME", "/home/kilian"),
             ("ARCHES_ARC_DIR", "/custom/arc"),
+            ("ARCHES_GPX_DIR", "~/history/gpx"),
             ("ARCHES_DATA_DIR", "/custom/data"),
             ("ARCHES_BIND", "0.0.0.0:9000"),
             ("ARCHES_MAP_STYLE", "https://example.com/style.json"),
@@ -138,6 +146,10 @@ mod tests {
             ("ARCHES_INGEST_INTERVAL", "30s"),
         ]);
         assert_eq!(config.arc_dir, PathBuf::from("/custom/arc"));
+        assert_eq!(
+            config.gpx_dir,
+            Some(PathBuf::from("/home/kilian/history/gpx"))
+        );
         assert_eq!(config.data_dir, PathBuf::from("/custom/data"));
         assert_eq!(config.bind, "0.0.0.0:9000");
         assert_eq!(config.map_style, "https://example.com/style.json");

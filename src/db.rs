@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 /// The schema version arches writes. Recorded on every ingest run so an old row stays readable.
-pub const SCHEMA_VERSION: i64 = 5;
+pub const SCHEMA_VERSION: i64 = 6;
 
 /// Append-only: never edit a shipped migration, add a new one.
 static MIGRATIONS: LazyLock<Migrations> = LazyLock::new(|| {
@@ -253,6 +253,21 @@ CREATE INDEX idx_heatmap_rollup_xy ON heatmap_rollup(shift, x, y, samples);
 DELETE FROM heatmap_rollup WHERE shift = 1;
 INSERT INTO heatmap_rollup (date, shift, x, y, samples)
 SELECT date, 1, x >> 1, y >> 1, sum(samples) FROM heatmap_cells GROUP BY date, x >> 1, y >> 1;
+"#,
+        ),
+        // Migration 6: where a row came from. Items and places always carried it; samples now do
+        // too, because a second source landing in the same tables makes "how much of this is
+        // Arc" a question `arches status` has to answer.
+        M::up(
+            r#"
+ALTER TABLE samples ADD COLUMN source TEXT;
+-- Counting by source is a group-by over every sample, so it is answered from the index alone.
+CREATE INDEX idx_samples_source ON samples(source);
+-- Backfill from the item each sample belongs to, which is the same string Arc puts on both;
+-- otherwise years of samples would stay unattributed until their buckets happened to change.
+UPDATE samples
+   SET source = (SELECT source FROM items WHERE items.id = samples.timeline_item_id)
+ WHERE source IS NULL;
 "#,
         ),
     ])

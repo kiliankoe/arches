@@ -14,6 +14,17 @@ use super::convert::rfc3339;
 use super::error::{ApiError, ApiResult};
 use crate::status::{self, Counts};
 
+/// One source's share of the database, dates as RFC 3339.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SourceCounts {
+    source: Option<String>,
+    items: i64,
+    samples: i64,
+    first_item_start: Option<String>,
+    last_item_start: Option<String>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Status {
@@ -25,6 +36,8 @@ pub struct Status {
     /// The newest bucket mtime ingest has seen, which is how fresh the data can possibly be.
     newest_bucket_mtime: Option<String>,
     counts: Counts,
+    /// What each source contributed, most items first.
+    by_source: Vec<SourceCounts>,
     first_summarized_date: Option<String>,
     last_summarized_date: Option<String>,
     ingest_running: bool,
@@ -61,6 +74,17 @@ fn build(conn: &Connection, ingest_running: bool) -> Result<Status> {
         last_run: status.last_run.as_ref().map(with_rfc3339_dates),
         newest_bucket_mtime: newest_bucket_mtime.and_then(rfc3339),
         counts: status.counts,
+        by_source: status
+            .by_source
+            .into_iter()
+            .map(|counts| SourceCounts {
+                source: counts.source,
+                items: counts.items,
+                samples: counts.samples,
+                first_item_start: counts.first_item_start.and_then(rfc3339),
+                last_item_start: counts.last_item_start.and_then(rfc3339),
+            })
+            .collect(),
         first_summarized_date: status.first_summarized_date,
         last_summarized_date: status.last_summarized_date,
         ingest_running,

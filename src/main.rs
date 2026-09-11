@@ -5,6 +5,7 @@ mod confirmation;
 mod db;
 mod derive;
 mod geo;
+mod gpx;
 mod highlights;
 mod ingest;
 mod status;
@@ -118,6 +119,14 @@ fn show_status(json: bool) -> anyhow::Result<()> {
         status.counts.files,
         status.counts.day_summaries
     );
+    for source in &status.by_source {
+        println!(
+            "  {}: {} items, {} samples",
+            source.source.as_deref().unwrap_or("(none)"),
+            source.items,
+            source.samples
+        );
+    }
     println!(
         "days {} .. {}",
         status.first_summarized_date.as_deref().unwrap_or("-"),

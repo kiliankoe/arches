@@ -14,12 +14,12 @@ use crate::arc::enums::{ActivityType, MovingState};
 use crate::confirmation::{self, Confirmation};
 use crate::derive;
 
-/// Columns 0..=20 of an item row. The five [`confirmation::COLUMNS`] follow at 21.
+/// Columns 0..=21 of an item row. The five [`confirmation::COLUMNS`] follow at 22.
 const ITEM_COLUMNS: &str = "id, is_visit, start_date, end_date, local_start_date, local_end_date,
      start_offset_seconds, end_offset_seconds, activity_type, trip_distance, step_count,
      floors_ascended, floors_descended, average_altitude, active_energy_burned,
      average_heart_rate, max_heart_rate, visit_latitude, visit_longitude, visit_custom_title,
-     visit_place_id";
+     visit_place_id, source";
 
 /// Arc keeps removed items as tombstones and the user can switch an item off; neither is part
 /// of the timeline that happened, here or in the derivation.
@@ -41,6 +41,7 @@ pub struct ItemRow {
     visit_longitude: Option<f64>,
     pub visit_custom_title: Option<String>,
     pub visit_place_id: Option<String>,
+    source: Option<String>,
     confirmation: Confirmation,
 }
 
@@ -70,7 +71,8 @@ impl ItemRow {
             visit_longitude: row.get(18)?,
             visit_custom_title: row.get(19)?,
             visit_place_id: row.get(20)?,
-            confirmation: Confirmation::from_row(row, 21)?,
+            source: row.get(21)?,
+            confirmation: Confirmation::from_row(row, 22)?,
         })
     }
 
@@ -118,6 +120,7 @@ impl ItemRow {
             }),
             activity_type: self.activity_type(),
             distance_m: self.distance_m,
+            source: self.source.clone(),
             confirmed: self.confirmation.confirmed,
             uncertain: self.confirmation.uncertain,
             health: self.health,
@@ -146,6 +149,8 @@ pub struct Item {
     pub clipped_seconds: Option<i64>,
     pub activity_type: Option<String>,
     pub distance_m: Option<f64>,
+    /// Which recording this came from: `LocoKit2` for Arc, the creator string for GPX history.
+    pub source: Option<String>,
     pub confirmed: bool,
     pub uncertain: bool,
     pub health: Health,

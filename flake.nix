@@ -35,6 +35,10 @@
           version = (pkgs.lib.importTOML ./Cargo.toml).package.version;
           src = self;
           cargoLock.lockFile = ./Cargo.lock;
+          # The GPX ingest turns coordinates into local offsets through jiff, which reads the
+          # system tzdb. The build sandbox has none, and without this every offset in the test
+          # suite would quietly come out as UTC.
+          TZDIR = "${pkgs.tzdata}/share/zoneinfo";
         };
       });
     };

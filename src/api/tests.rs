@@ -20,6 +20,8 @@ const TRAM_ID: &str = "B2000000-0000-4000-8000-000000000102";
 const WALK_ID: &str = "B5000000-0000-4000-8000-000000000105";
 const HBF_ID: &str = "A1000000-0000-4000-8000-000000000001";
 const FLIGHT_ID: &str = "B7000000-0000-4000-8000-000000000107";
+/// The `creator` of the GPX history fixtures, which is the `source` their rows carry.
+const GPX_SOURCE: &str = "quantified-map-gpx";
 /// A viewport around the fixture's corner of Dresden.
 const DRESDEN: &str = "bbox=13.70,51.03,13.76,51.06";
 
@@ -30,14 +32,34 @@ struct Fixture {
 
 impl Fixture {
     fn new() -> Self {
+        Self::build(false)
+    }
+
+    /// Also ingests the GPX history fixtures, the second source. Its 2025 file lands on Arc's
+    /// first day and is skipped, so the two never overlap.
+    fn with_gpx() -> Self {
+        Self::build(true)
+    }
+
+    fn build(with_gpx: bool) -> Self {
         let temp = tempfile::tempdir().unwrap();
+        let fixtures = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures");
         let arc_dir = temp.path().join("arc");
-        copy_tree(
-            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/backup"),
-            &arc_dir,
-        );
+        copy_tree(&fixtures.join("backup"), &arc_dir);
+        let gpx_dir = temp.path().join("gpx");
+        if with_gpx {
+            copy_tree(&fixtures.join("gpx"), &gpx_dir);
+        }
         let config = Config::from_pairs([
             ("ARCHES_ARC_DIR", arc_dir.to_str().unwrap()),
+            (
+                "ARCHES_GPX_DIR",
+                if with_gpx {
+                    gpx_dir.to_str().unwrap()
+                } else {
+                    ""
+                },
+            ),
             (
                 "ARCHES_DATA_DIR",
                 temp.path().join("data").to_str().unwrap(),
@@ -127,6 +149,72 @@ async fn status_reports_the_run_and_the_counts_with_rfc_3339_dates() {
         "{}",
         run["startedAt"]
     );
+}
+
+/// The GPX history is a second source in the same tables, and the API says so on every item it
+/// hands out and in the status counts.
+#[tokio::test]
+async fn a_gpx_day_reads_like_any_other_day() {
+    let fixture = Fixture::with_gpx();
+
+    let day = fixture.ok("/api/days/2016-02-18").await;
+
+    assert_eq!(day["summary"]["itemCount"], 5);
+    assert_eq!(day["summary"]["utcOffsetSeconds"], 3600);
+    // The transport trip and the unnamed visit are what is left to review.
+    assert_eq!(day["summary"]["unconfirmedItems"], 2);
+    assert_eq!(day["summary"]["confirmed"], false);
+    assert_eq!(day["summary"]["durationByType"]["walking"], 600);
+
+    let items = day["items"].as_array().unwrap();
+    assert!(
+        items.iter().all(|item| item["source"] == GPX_SOURCE),
+        "{items:?}"
+    );
+    let by_type = |activity: &str| {
+        items
+            .iter()
+            .find(|item| item["activityType"] == activity)
+            .unwrap_or_else(|| panic!("no {activity} item in {items:?}"))
+            .clone()
+    };
+    // `transport` means motorised and nothing more, so the car it lands on is not a claim.
+    let transport = by_type("car");
+    assert_eq!(transport["confirmed"], false);
+    assert_eq!(transport["uncertain"], true);
+    let walk = by_type("walking");
+    assert_eq!(walk["confirmed"], true);
+    assert_eq!(walk["uncertain"], false);
+    assert!(walk["distanceM"].as_f64().unwrap() > 1_000.0);
+
+    let visit = items
+        .iter()
+        .find(|item| item["kind"] == "visit" && item["place"]["name"] == "Zwinger")
+        .unwrap();
+    assert_eq!(visit["confirmed"], true);
+    assert_eq!(visit["place"]["visitCount"], 2);
+    assert!(visit["place"]["countryCode"].is_null());
+
+    // Arc's own day is untouched by any of it.
+    let arc_day = fixture.ok(&format!("/api/days/{DAY}")).await;
+    assert_eq!(arc_day["items"][0]["source"], "LocoKit2");
+}
+
+#[tokio::test]
+async fn status_counts_what_each_source_contributed() {
+    let fixture = Fixture::with_gpx();
+
+    let status = fixture.ok("/api/status").await;
+
+    let by_source = status["bySource"].as_array().unwrap();
+    assert_eq!(by_source.len(), 2, "{by_source:?}");
+    assert_eq!(by_source[0]["source"], "LocoKit2");
+    assert_eq!(by_source[0]["items"], 9);
+    assert_eq!(by_source[0]["samples"], 23);
+    assert_eq!(by_source[1]["source"], GPX_SOURCE);
+    assert_eq!(by_source[1]["items"], 8);
+    assert_eq!(by_source[1]["samples"], 14);
+    assert_eq!(by_source[1]["firstItemStart"], "2016-02-18T08:00:00Z");
 }
 
 #[tokio::test]

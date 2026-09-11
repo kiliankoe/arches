@@ -1,0 +1,182 @@
+/* The frame around the map: the shell, the top bar, the rail and the status line. */
+
+.shell {
+  position: fixed;
+  inset: 0;
+}
+
+/* Two class selectors on purpose: maplibre-gl.css sets `position: relative` on the same element,
+   and its stylesheet loads after ours with the lazy map chunk, so a single-class rule loses. */
+.shell .map {
+  position: absolute;
+  inset: 0;
+}
+
+.map-placeholder {
+  background: #e8eaef;
+  display: grid;
+  place-items: center;
+}
+
+.map-failed {
+  font-size: var(--size-2);
+  color: var(--ink-2);
+}
+
+/* Top bar */
+
+.topbar {
+  position: absolute;
+  inset: 0 0 auto 0;
+  z-index: 2;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  height: 48px;
+  padding: 0 14px;
+  background: rgba(251, 252, 253, 0.93);
+  backdrop-filter: blur(8px);
+  border-bottom: 1px solid var(--line);
+}
+
+.topbar-title {
+  flex: 1 1 0;
+  min-width: 3em;
+  font-size: var(--size-3);
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.topbar-controls {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: var(--size-2);
+  color: var(--ink-2);
+}
+
+.topbar-step {
+  display: flex;
+  gap: 2px;
+}
+
+.step {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  font-size: var(--size-3);
+  line-height: 1;
+  color: var(--ink);
+  border: 1px solid var(--line);
+  background: #fff;
+}
+
+.step:first-child {
+  border-radius: 3px 0 0 3px;
+}
+
+.step:last-child {
+  border-radius: 0 3px 3px 0;
+}
+
+.step:hover {
+  background: var(--hover);
+  text-decoration: none;
+}
+
+.step-dead {
+  color: var(--ink-3);
+  background: var(--panel);
+}
+
+.date-input {
+  font: inherit;
+  font-size: var(--size-2);
+  font-variant-numeric: tabular-nums;
+  color: var(--ink);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 3px 6px;
+}
+
+/* Rail, and its bottom-sheet form on a narrow screen */
+
+.rail {
+  position: absolute;
+  z-index: 1;
+  top: 48px;
+  left: 0;
+  bottom: 0;
+  width: 360px;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-solid);
+  border-right: 1px solid var(--line);
+}
+
+.rail-wide {
+  width: min(760px, 68vw);
+}
+
+.rail-body {
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.rail-footer {
+  border-top: 1px solid var(--line);
+  padding: 8px 16px;
+  background: var(--panel);
+}
+
+.statusline {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: var(--size-1);
+  color: var(--ink-2);
+  min-height: 1.4em;
+}
+
+.statusline-error {
+  color: var(--danger);
+}
+
+@media (max-width: 720px) {
+  .rail,
+  .rail-wide {
+    top: auto;
+    width: auto;
+    right: 0;
+    height: 52vh;
+    border-right: 0;
+    border-top: 1px solid var(--line-strong);
+    box-shadow: 0 -1px 0 rgba(27, 34, 48, 0.06);
+  }
+
+  .topbar {
+    gap: 10px;
+    padding: 0 10px;
+  }
+
+  .topbar-title {
+    font-size: var(--size-2);
+  }
+
+  .topbar-controls {
+    gap: 10px;
+    font-size: var(--size-1);
+  }
+
+  .date-input {
+    font-size: var(--size-1);
+    padding: 2px 4px;
+  }
+}

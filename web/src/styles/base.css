@@ -1,0 +1,124 @@
+/*
+ * Chrome is cool neutral and gets out of the way; the map is the only thing here with a picture in
+ * it. The activity palette is the single source of colour, and it is injected from
+ * `lib/activity.ts` at startup rather than restated here, so the two cannot drift.
+ *
+ * Four type sizes, one family, tabular numerals everywhere a figure appears.
+ */
+
+:root {
+  --ink: #1b2230;
+  --ink-2: #59627a;
+  --ink-3: #8d95a8;
+  --panel: #f7f8fa;
+  --panel-solid: #fbfcfd;
+  --line: #e1e4ec;
+  --line-strong: #c9cedb;
+  --hover: #eef0f5;
+  --focus: #2b4ca8;
+  --danger: #9d2f28;
+
+  --size-1: 0.75rem;
+  --size-2: 0.875rem;
+  --size-3: 1.0625rem;
+  --size-4: 1.375rem;
+
+  --ui: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+
+  font-family: var(--ui);
+  font-size: 16px;
+  line-height: 1.4;
+  color: var(--ink);
+  background: var(--panel);
+  font-variant-numeric: tabular-nums;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  overflow: hidden;
+}
+
+h1,
+h2,
+p,
+ol,
+ul {
+  margin: 0;
+  font-weight: inherit;
+  font-size: inherit;
+}
+
+ol,
+ul {
+  padding: 0;
+  list-style: none;
+}
+
+a {
+  color: inherit;
+  text-decoration: none;
+}
+
+a:hover {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+button {
+  font: inherit;
+  font-variant-numeric: inherit;
+  color: inherit;
+  background: none;
+  border: 0;
+  padding: 0;
+  cursor: pointer;
+  text-align: left;
+}
+
+table {
+  border-collapse: collapse;
+}
+
+:focus-visible {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+.quiet {
+  color: var(--ink-2);
+  font-size: var(--size-1);
+}
+
+.notice {
+  color: var(--ink-2);
+  font-size: var(--size-2);
+  padding: 14px 16px;
+}
+
+.notice-error {
+  color: var(--danger);
+}
+
+.link-button {
+  color: var(--focus);
+  font-size: var(--size-1);
+}
+
+.link-button:hover:not(:disabled) {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+.link-button:disabled {
+  color: var(--ink-3);
+  cursor: default;
+}

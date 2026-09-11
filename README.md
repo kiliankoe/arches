@@ -200,6 +200,69 @@ While `arches serve` is running, ingest polls Arc's buckets every
 own; requests read through separate connections, which WAL lets them do while a
 pass is writing.
 
+## Web UI
+
+A React app in `web/`, built with Vite and embedded in the binary. The map is
+the subject: a full-bleed MapLibre canvas on the OpenFreeMap style from
+`/api/config`, with a rail of chrome floating over it. Below 720 px the rail
+becomes a bottom sheet.
+
+| Route | |
+| --- | --- |
+| `/` | Redirects to today's local day. |
+| `/day/{date}` | The day's track on the map and its timeline in the rail: time range, place or activity, distance or duration, totals and an unconfirmed count. |
+| `/month/{yyyy-mm}` | A calendar of the month, each day a distance bar segmented by activity type. |
+| `/week/{yyyy-Www}` | Seven 24 hour strips, one per ISO-week day, items drawn as blocks by clipped time. |
+| `/place/{id}` | One place, its address and counts, and its visits newest first. |
+
+Every route deep-links; unknown paths fall back to the shell, so the browser's
+address bar is a usable input. In the day view the left and right arrow keys
+step to the previous and next day *that has data*: the navigation asks
+`/api/days` for a window around the date rather than walking into the middle of
+a four-month recording gap.
+
+Colour means exactly one thing, the activity type, and it is defined once in
+`web/src/lib/activity.ts` and mirrored into CSS custom properties at startup so
+the map lines, the timeline rules, the calendar bars and the week blocks cannot
+disagree:
+
+| | | | | | | | | |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| walking | running | cycling | car | bus | train | tram | airplane | other |
+| `#3c7a1e` | `#a92e72` | `#0e7b72` | `#be3a2e` | `#b0690c` | `#2b4ca8` | `#7040a6` | `#1b6c93` | `#7a7420` |
+
+Visits are ink (`#1b2230`), not a hue. Confirmation state never takes a colour
+of its own: an item Arc has not had confirmed is drawn dashed, on the map, in
+the rail and in the calendar, so the palette keeps meaning activity.
+
+Times are rendered in the offset the day was recorded in, from the API's
+`utcOffsetSeconds` and the item's own start and end offsets, never in the
+browser's timezone. A day in Bangkok reads in Bangkok time from anywhere.
+
+maplibre-gl is loaded lazily, so the calendar and week grids render before the
+map library arrives, and a map that cannot start (no WebGL) leaves the lists
+intact rather than taking the page down. MapLibre parses vector tiles in a web
+worker that it locates at runtime, which Vite cannot see; `MapView.tsx` imports
+the worker with `?worker&url` and hands MapLibre that URL. Without it the
+production build serves the SPA shell in place of the worker and the map shows
+only the low-zoom raster layer.
+
+### Building it into the binary
+
+`cargo build` embeds whatever is in `web/dist` at compile time via `rust-embed`,
+so the UI is built first:
+
+```
+pnpm --dir web install
+pnpm --dir web build
+cargo build --release
+```
+
+`web/dist` is gitignored; `build.rs` creates it empty so a fresh checkout still
+compiles, and `/` then answers with a note saying the UI is not in this binary.
+During development run `pnpm --dir web dev` instead and let Vite proxy `/api` to
+`arches serve`.
+
 ## Development
 
 This project uses a Nix flake and direnv:

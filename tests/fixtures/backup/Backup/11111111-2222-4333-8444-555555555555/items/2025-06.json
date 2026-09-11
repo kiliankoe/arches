@@ -58,7 +58,11 @@
       "confirmedActivityType" : 24,
       "uncertainActivityType" : false,
       "lastSaved" : "2025-06-10T09:58:00Z",
-      "somethingArcAddedLater" : [1, 2, 3]
+      "somethingArcAddedLater" : [
+        1,
+        2,
+        3
+      ]
     }
   },
   {
@@ -86,7 +90,7 @@
       "placeId" : "A2000000-0000-4000-8000-000000000002",
       "confirmedPlace" : false,
       "uncertainPlace" : true,
-      "customTitle" : "coffee stop",
+      "customTitle" : "coffee & cake",
       "streetAddress" : null,
       "lastSaved" : "2025-06-10T09:58:00Z"
     }
@@ -103,7 +107,7 @@
       "deleted" : false,
       "lastSaved" : "2025-06-10T09:58:00Z",
       "previousItemId" : "B3000000-0000-4000-8000-000000000103",
-      "nextItemId" : null,
+      "nextItemId" : "B5000000-0000-4000-8000-000000000105",
       "samplesChanged" : false,
       "locked" : false
     },
@@ -113,6 +117,33 @@
       "speed" : 1.07,
       "classifiedActivityType" : null,
       "confirmedActivityType" : 99,
+      "uncertainActivityType" : true,
+      "lastSaved" : "2025-06-10T09:58:00Z"
+    }
+  },
+  {
+    "base" : {
+      "id" : "B5000000-0000-4000-8000-000000000105",
+      "isVisit" : false,
+      "startDate" : "2025-06-10T09:10:00Z",
+      "endDate" : "2025-06-10T09:20:00Z",
+      "source" : "LocoKit2",
+      "sourceVersion" : "9.0.0",
+      "disabled" : false,
+      "deleted" : false,
+      "lastSaved" : "2025-06-10T09:58:00Z",
+      "previousItemId" : "B4000000-0000-4000-8000-000000000104",
+      "nextItemId" : null,
+      "samplesChanged" : false,
+      "locked" : false,
+      "stepCount" : 610
+    },
+    "trip" : {
+      "itemId" : "B5000000-0000-4000-8000-000000000105",
+      "distance" : 580.0,
+      "speed" : 0.97,
+      "classifiedActivityType" : 2,
+      "confirmedActivityType" : null,
       "uncertainActivityType" : true,
       "lastSaved" : "2025-06-10T09:58:00Z"
     }

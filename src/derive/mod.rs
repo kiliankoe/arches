@@ -13,7 +13,7 @@ use jiff::tz::Offset;
 use jiff::{Timestamp, ToSpan};
 use rusqlite::Connection;
 
-pub use days::recompute_days;
+pub use days::{MAX_ACCURACY_M, recompute_days};
 pub use items::derive_items;
 
 /// The local calendar date of an instant at a given UTC offset, `YYYY-MM-DD`.
@@ -40,6 +40,23 @@ pub fn day_start(date: Date, offset_seconds: i32) -> Timestamp {
         } else {
             Timestamp::MAX
         })
+}
+
+/// Milliseconds of the span `[start_ms, end_ms]` that fall inside the local day `date`.
+///
+/// Each end uses its own offset, so the night the clocks change is still measured correctly
+/// and nothing produces a negative or a 25-hour item.
+pub fn clipped_ms(
+    start_ms: i64,
+    end_ms: i64,
+    start_offset: i32,
+    end_offset: i32,
+    date: Date,
+) -> i64 {
+    let next_date = date.tomorrow().unwrap_or(date);
+    let window_start = day_start(date, start_offset).as_millisecond();
+    let window_end = day_start(next_date, end_offset).as_millisecond();
+    (end_ms.min(window_end) - start_ms.max(window_start)).max(0)
 }
 
 /// Every date from `from` to `to` inclusive. Empty if they are the wrong way round.

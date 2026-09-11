@@ -457,14 +457,14 @@ mod tests {
         assert_eq!(summary.files_seen, 4);
         assert_eq!(summary.files_ingested, 4);
         assert_eq!(summary.places_upserted, 2);
-        assert_eq!(summary.items_upserted, 4);
-        assert_eq!(summary.samples_upserted, 12);
+        assert_eq!(summary.items_upserted, 5);
+        assert_eq!(summary.samples_upserted, 17);
         assert_eq!(summary.device_id.as_deref(), Some(DEVICE));
         assert!(summary.error.is_none(), "{:?}", summary.error);
 
         assert_eq!(fixture.count("places"), 2);
-        assert_eq!(fixture.count("items"), 4);
-        assert_eq!(fixture.count("samples"), 12);
+        assert_eq!(fixture.count("items"), 5);
+        assert_eq!(fixture.count("samples"), 17);
         assert_eq!(fixture.count("ingest_files"), 4);
 
         for relative in [
@@ -530,10 +530,11 @@ mod tests {
             .unwrap();
         assert_eq!(days.len(), 2);
         assert_eq!(days[0].0, "2025-06-10");
-        assert_eq!(days[0].1, 4);
-        assert_eq!(days[0].2, 10);
-        // The tram ride from Hauptbahnhof to Postplatz, about 1.15 km along its ten fixes.
-        assert!((days[0].3 - 1150.0).abs() < 25.0, "{:?}", days[0]);
+        assert_eq!(days[0].1, 5);
+        assert_eq!(days[0].2, 15);
+        // The tram ride from Hauptbahnhof to Postplatz and the walk on to Theaterplatz,
+        // about 1.15 km plus 530 m along their fifteen fixes.
+        assert!((days[0].3 - 1680.0).abs() < 25.0, "{:?}", days[0]);
         assert_eq!(days[1].0, "2025-06-12");
 
         // 2025-06-11 has neither an item nor a sample and must have no row at all.
@@ -623,7 +624,7 @@ mod tests {
 
         assert_eq!(summary.files_seen, 4);
         assert_eq!(summary.files_ingested, 3);
-        assert_eq!(summary.samples_upserted, 10);
+        assert_eq!(summary.samples_upserted, 15);
         let error = summary.error.unwrap();
         assert!(error.contains("samples/2025-W25.json"), "{error}");
 

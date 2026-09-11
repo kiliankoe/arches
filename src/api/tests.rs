@@ -1,0 +1,575 @@
+//! Integration tests over the whole router, against a database seeded by running the real
+//! ingest over the fixture backup into a temp dir.
+
+use std::fs;
+use std::path::{Path, PathBuf};
+
+use axum::Router;
+use axum::body::Body;
+use axum::http::{Request, StatusCode, header};
+use http_body_util::BodyExt;
+use serde_json::Value;
+use tower::ServiceExt;
+
+use super::*;
+use crate::{db, ingest};
+
+const DAY: &str = "2025-06-10";
+const VISIT_ID: &str = "B1000000-0000-4000-8000-000000000101";
+const TRAM_ID: &str = "B2000000-0000-4000-8000-000000000102";
+const WALK_ID: &str = "B5000000-0000-4000-8000-000000000105";
+const HBF_ID: &str = "A1000000-0000-4000-8000-000000000001";
+
+struct Fixture {
+    _temp: tempfile::TempDir,
+    app: Router,
+}
+
+impl Fixture {
+    fn new() -> Self {
+        let temp = tempfile::tempdir().unwrap();
+        let arc_dir = temp.path().join("arc");
+        copy_tree(
+            &PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/backup"),
+            &arc_dir,
+        );
+        let config = Config::from_pairs([
+            ("ARCHES_ARC_DIR", arc_dir.to_str().unwrap()),
+            (
+                "ARCHES_DATA_DIR",
+                temp.path().join("data").to_str().unwrap(),
+            ),
+            ("ARCHES_MAP_STYLE", "https://example.com/style.json"),
+        ])
+        .unwrap();
+
+        let mut conn = db::open(&config.db_path()).unwrap();
+        let summary = ingest::run(&mut conn, &config).unwrap();
+        assert!(summary.error.is_none(), "{:?}", summary.error);
+
+        Self {
+            _temp: temp,
+            app: router(AppState::new(config, conn)),
+        }
+    }
+
+    async fn response(&self, request: Request<Body>) -> (StatusCode, Vec<u8>, header::HeaderMap) {
+        let response = self.app.clone().oneshot(request).await.unwrap();
+        let status = response.status();
+        let headers = response.headers().clone();
+        let body = response.into_body().collect().await.unwrap().to_bytes();
+        (status, body.to_vec(), headers)
+    }
+
+    async fn get(&self, uri: &str) -> (StatusCode, Value) {
+        let (status, body, _) = self
+            .response(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await;
+        let json = serde_json::from_slice(&body).unwrap_or_else(|_| {
+            panic!(
+                "{uri} did not return JSON: {}",
+                String::from_utf8_lossy(&body)
+            )
+        });
+        (status, json)
+    }
+
+    async fn ok(&self, uri: &str) -> Value {
+        let (status, json) = self.get(uri).await;
+        assert_eq!(status, StatusCode::OK, "{uri}: {json}");
+        json
+    }
+
+    async fn text(&self, uri: &str) -> (StatusCode, String, header::HeaderMap) {
+        let (status, body, headers) = self
+            .response(Request::builder().uri(uri).body(Body::empty()).unwrap())
+            .await;
+        (status, String::from_utf8(body).unwrap(), headers)
+    }
+}
+
+fn copy_tree(from: &Path, to: &Path) {
+    fs::create_dir_all(to).unwrap();
+    for entry in fs::read_dir(from).unwrap() {
+        let entry = entry.unwrap();
+        let target = to.join(entry.file_name());
+        if entry.file_type().unwrap().is_dir() {
+            copy_tree(&entry.path(), &target);
+        } else {
+            fs::copy(entry.path(), &target).unwrap();
+        }
+    }
+}
+
+#[tokio::test]
+async fn status_reports_the_run_and_the_counts_with_rfc_3339_dates() {
+    let fixture = Fixture::new();
+
+    let status = fixture.ok("/api/status").await;
+
+    assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
+    assert_eq!(status["counts"]["items"], 5);
+    assert_eq!(status["counts"]["places"], 2);
+    assert_eq!(status["counts"]["samples"], 17);
+    assert_eq!(status["ingestRunning"], false);
+    assert_eq!(status["firstSummarizedDate"], DAY);
+    assert_eq!(status["lastBackupDate"], "2025-06-10T10:00:00Z");
+    assert!(status["newestBucketMtime"].as_str().unwrap().ends_with('Z'));
+    let run = &status["lastRun"];
+    assert_eq!(run["filesIngested"], 4);
+    assert!(
+        run["startedAt"].as_str().unwrap().ends_with('Z'),
+        "{}",
+        run["startedAt"]
+    );
+}
+
+#[tokio::test]
+async fn config_serves_the_map_style() {
+    let fixture = Fixture::new();
+    let config = fixture.ok("/api/config").await;
+    assert_eq!(config["mapStyle"], "https://example.com/style.json");
+}
+
+#[tokio::test]
+async fn ingest_can_be_triggered_and_finds_nothing_changed() {
+    let fixture = Fixture::new();
+
+    let (status, body, _) = fixture
+        .response(
+            Request::builder()
+                .method("POST")
+                .uri("/api/ingest")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    let summary: Value = serde_json::from_slice(&body).unwrap();
+    assert_eq!(summary["filesSeen"], 4);
+    assert_eq!(summary["filesIngested"], 0);
+    assert!(summary["startedAt"].as_str().unwrap().ends_with('Z'));
+}
+
+#[tokio::test]
+async fn days_returns_only_the_days_that_have_rows() {
+    let fixture = Fixture::new();
+
+    let days = fixture.ok("/api/days?from=2025-06-01&to=2025-06-30").await;
+
+    let days = days.as_array().unwrap();
+    assert_eq!(days.len(), 2, "{days:?}");
+    assert_eq!(days[0]["date"], DAY);
+    assert_eq!(days[1]["date"], "2025-06-12");
+    let first = &days[0];
+    assert_eq!(first["utcOffsetSeconds"], 7200);
+    assert_eq!(first["itemCount"], 5);
+    assert_eq!(first["visitCount"], 2);
+    assert_eq!(first["tripCount"], 3);
+    assert!(first["distanceM"].as_f64().unwrap() > 1_000.0);
+    assert!(first["durationByType"]["tram"].as_i64().unwrap() > 0);
+    assert_eq!(first["placeIds"].as_array().unwrap().len(), 2);
+    assert_eq!(first["countryCodes"][0], "de");
+    assert_eq!(first["localities"][0], "Dresden");
+    assert_eq!(first["bbox"].as_array().unwrap().len(), 4);
+    // [minLon, minLat, maxLon, maxLat], so longitude comes first.
+    assert!(first["bbox"][0].as_f64().unwrap() < 20.0);
+    assert!(first["firstSampleAt"].as_str().unwrap().ends_with('Z'));
+}
+
+/// Two of the day's five items were never reviewed in Arc, so nothing about it is final yet.
+#[tokio::test]
+async fn confirmation_flags_travel_from_items_to_days() {
+    let fixture = Fixture::new();
+
+    let day = fixture.ok(&format!("/api/days/{DAY}")).await;
+
+    assert_eq!(day["summary"]["unconfirmedItems"], 2);
+    assert_eq!(day["summary"]["confirmed"], false);
+    let items = day["items"].as_array().unwrap();
+    let by_id = |id: &str| items.iter().find(|item| item["id"] == id).unwrap().clone();
+    assert_eq!(by_id(VISIT_ID)["confirmed"], true);
+    assert_eq!(by_id(TRAM_ID)["confirmed"], true);
+    assert_eq!(by_id(WALK_ID)["confirmed"], false);
+    assert_eq!(by_id(WALK_ID)["uncertain"], true);
+
+    // A day of nothing but samples has nothing left to review.
+    let quiet = fixture.ok("/api/days/2025-06-12").await;
+    assert_eq!(quiet["summary"]["itemCount"], 0);
+    assert_eq!(quiet["summary"]["confirmed"], true);
+    assert_eq!(quiet["summary"]["unconfirmedItems"], 0);
+}
+
+#[tokio::test]
+async fn a_day_lists_its_items_in_order_with_places_and_clipping() {
+    let fixture = Fixture::new();
+
+    let day = fixture.ok(&format!("/api/days/{DAY}")).await;
+
+    let items = day["items"].as_array().unwrap();
+    assert_eq!(items.len(), 5);
+    assert_eq!(items[0]["id"], VISIT_ID);
+    assert_eq!(items[0]["kind"], "visit");
+    assert_eq!(items[0]["startDate"], "2025-06-10T08:00:00Z");
+    assert_eq!(items[0]["localStartDate"], DAY);
+    assert_eq!(items[0]["startOffsetSeconds"], 7200);
+    assert_eq!(items[0]["durationSeconds"], 1200);
+    // The whole visit falls inside the day, so clipping changes nothing.
+    assert_eq!(items[0]["clippedSeconds"], 1200);
+    assert_eq!(items[0]["place"]["name"], "Dresden Hauptbahnhof");
+    assert_eq!(items[0]["place"]["locality"], "Dresden");
+    assert_eq!(items[0]["place"]["id"], HBF_ID);
+    assert_eq!(items[0]["health"]["stepCount"], 320.0);
+    assert_eq!(items[1]["kind"], "trip");
+    assert_eq!(items[1]["activityType"], "tram");
+    assert_eq!(items[1]["distanceM"], 1420.5);
+    assert!(items[1]["place"].is_null());
+}
+
+#[tokio::test]
+async fn days_rejects_bad_parameters_and_unknown_dates() {
+    let fixture = Fixture::new();
+
+    for uri in [
+        "/api/days?from=nonsense",
+        "/api/days?from=2025-06-10&to=2025-06-01",
+        "/api/days?from=2020-01-01&to=2025-01-01",
+    ] {
+        let (status, json) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert!(json["error"].is_string(), "{uri}: {json}");
+    }
+
+    let (status, json) = fixture.get("/api/days/2024-01-01").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert!(json["error"].as_str().unwrap().contains("2024-01-01"));
+    assert_eq!(
+        fixture.get("/api/days/nope").await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    // The default range ends today, so the fixture's 2025 days are well outside it.
+    let today = fixture.ok("/api/days").await;
+    assert!(today.as_array().unwrap().is_empty(), "{today}");
+}
+
+#[tokio::test]
+async fn geojson_has_a_line_per_trip_and_a_point_per_visit() {
+    let fixture = Fixture::new();
+
+    let collection = fixture.ok(&format!("/api/days/{DAY}/geojson")).await;
+
+    assert_eq!(collection["type"], "FeatureCollection");
+    let features = collection["features"].as_array().unwrap();
+    // Two visits, the tram and the walk. The third trip has no fix on this day.
+    assert_eq!(features.len(), 4, "{features:?}");
+    let kinds: Vec<&str> = features
+        .iter()
+        .map(|feature| feature["geometry"]["type"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["Point", "LineString", "Point", "LineString"]);
+
+    let point = &features[0];
+    assert_eq!(point["properties"]["itemId"], VISIT_ID);
+    assert_eq!(point["properties"]["placeId"], HBF_ID);
+    assert_eq!(point["properties"]["name"], "Dresden Hauptbahnhof");
+    assert_eq!(point["properties"]["confirmed"], true);
+    assert_eq!(point["geometry"]["coordinates"][0], 13.732);
+
+    let line = &features[1];
+    assert_eq!(line["properties"]["itemId"], TRAM_ID);
+    assert_eq!(line["properties"]["activityType"], "tram");
+    assert_eq!(
+        line["geometry"]["coordinates"].as_array().unwrap().len(),
+        10
+    );
+    assert_eq!(features[3]["properties"]["confirmed"], false);
+
+    assert_eq!(
+        fixture.get("/api/days/2024-01-01/geojson").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        fixture
+            .get(&format!("/api/days/{DAY}/geojson?simplify=nope"))
+            .await
+            .0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+#[tokio::test]
+async fn simplify_drops_points_but_never_the_ends() {
+    let fixture = Fixture::new();
+
+    let full = fixture.ok(&format!("/api/days/{DAY}/geojson")).await;
+    let simplified = fixture
+        .ok(&format!("/api/days/{DAY}/geojson?simplify=100"))
+        .await;
+
+    let line = |collection: &Value| collection["features"][1]["geometry"]["coordinates"].clone();
+    let full = line(&full);
+    let simplified = line(&simplified);
+    let (full, simplified) = (full.as_array().unwrap(), simplified.as_array().unwrap());
+
+    assert!(
+        simplified.len() < full.len(),
+        "{} points, expected fewer than {}",
+        simplified.len(),
+        full.len()
+    );
+    assert_eq!(simplified.first(), full.first());
+    assert_eq!(simplified.last(), full.last());
+}
+
+#[tokio::test]
+async fn gpx_renders_waypoints_tracks_and_escapes_markup() {
+    let fixture = Fixture::new();
+
+    let (status, gpx, headers) = fixture.text(&format!("/api/days/{DAY}.gpx")).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::CONTENT_TYPE], "application/gpx+xml");
+    assert!(gpx.starts_with("<?xml"), "{gpx}");
+    assert!(gpx.contains(r#"<gpx version="1.1""#));
+    assert!(gpx.contains(r#"<wpt lat="51.0403" lon="13.732">"#), "{gpx}");
+    assert!(gpx.contains("<time>2025-06-10T08:00:00Z</time>"));
+    assert!(gpx.contains("<name>Dresden Hauptbahnhof</name>"));
+    assert!(gpx.contains("<type>tram</type>"));
+    assert!(gpx.contains("<ele>113</ele>"), "{gpx}");
+    assert!(gpx.contains("<trkpt lat=\"51.0403\" lon=\"13.732\">"));
+    // The visit's custom title has an ampersand in it and must arrive escaped.
+    assert!(gpx.contains("<name>coffee &amp; cake</name>"), "{gpx}");
+    assert!(!gpx.contains("coffee & cake"));
+
+    assert_eq!(
+        fixture.get("/api/days/2024-01-01.gpx").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn an_item_and_its_samples_are_addressable() {
+    let fixture = Fixture::new();
+
+    let item = fixture.ok(&format!("/api/items/{TRAM_ID}")).await;
+    assert_eq!(item["kind"], "trip");
+    assert_eq!(item["activityType"], "tram");
+    assert_eq!(item["confirmed"], true);
+    // Nothing to clip against outside a day.
+    assert!(item["clippedSeconds"].is_null());
+    assert_eq!(
+        fixture.ok(&format!("/api/items/{VISIT_ID}")).await["place"]["id"],
+        HBF_ID
+    );
+
+    let samples = fixture.ok(&format!("/api/items/{TRAM_ID}/samples")).await;
+    let samples = samples.as_array().unwrap();
+    assert_eq!(samples.len(), 10);
+    assert_eq!(samples[0]["date"], "2025-06-10T08:20:00Z");
+    assert_eq!(samples[0]["latitude"], 51.0403);
+    assert_eq!(samples[0]["altitude"], 113.0);
+    assert_eq!(samples[0]["movingState"], "moving");
+    assert_eq!(samples[0]["classifiedActivityType"], "tram");
+
+    let simplified = fixture
+        .ok(&format!("/api/items/{TRAM_ID}/samples?simplify=100"))
+        .await;
+    let simplified = simplified.as_array().unwrap();
+    assert!(simplified.len() < samples.len());
+    assert_eq!(simplified.first(), samples.first());
+    assert_eq!(simplified.last(), samples.last());
+
+    assert_eq!(
+        fixture.get("/api/items/nope").await.0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        fixture.get("/api/items/nope/samples").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn places_search_filter_and_list_visits() {
+    let fixture = Fixture::new();
+
+    let all = fixture.ok("/api/places").await;
+    let all = all.as_array().unwrap();
+    assert_eq!(all.len(), 2);
+    // Most visited first.
+    assert_eq!(all[0]["id"], HBF_ID);
+    assert_eq!(all[0]["visitCount"], 12);
+    assert_eq!(all[0]["visitDays"], 9);
+    assert_eq!(all[0]["radiusMean"], 62.5);
+    assert_eq!(all[0]["category"], "transit_station");
+    assert_eq!(all[0]["isStale"], false);
+    assert_eq!(all[0]["lastVisitDate"], "2025-06-10T08:20:00Z");
+
+    // Case-insensitive, and across name, locality and street address.
+    assert_eq!(fixture.ok("/api/places?q=hauptbahn").await[0]["id"], HBF_ID);
+    assert_eq!(
+        fixture.ok("/api/places?q=wiener%20platz").await[0]["id"],
+        HBF_ID
+    );
+    assert_eq!(
+        fixture
+            .ok("/api/places?q=dresden")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        fixture
+            .ok("/api/places?q=berlin")
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fixture
+            .ok("/api/places?country=DE")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(
+        fixture
+            .ok("/api/places?limit=1")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        fixture.get("/api/places?limit=0").await.0,
+        StatusCode::BAD_REQUEST
+    );
+
+    let place = fixture.ok(&format!("/api/places/{HBF_ID}")).await;
+    assert_eq!(place["name"], "Dresden Hauptbahnhof");
+    assert_eq!(
+        fixture.get("/api/places/nope").await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    let visits = fixture.ok(&format!("/api/places/{HBF_ID}/visits")).await;
+    let visits = visits.as_array().unwrap();
+    assert_eq!(visits.len(), 1);
+    assert_eq!(visits[0]["id"], VISIT_ID);
+    assert_eq!(visits[0]["place"]["id"], HBF_ID);
+    assert!(
+        fixture
+            .ok(&format!("/api/places/{HBF_ID}/visits?from=2025-07-01"))
+            .await
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    assert_eq!(
+        fixture.get("/api/places/nope/visits").await.0,
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[tokio::test]
+async fn near_orders_by_distance_and_honours_the_radius() {
+    let fixture = Fixture::new();
+
+    // Hauptbahnhof itself: Postplatz is about 1.07 km away.
+    let near = fixture
+        .ok("/api/near?lat=51.0403&lon=13.7320&radius=2000")
+        .await;
+    let near = near.as_array().unwrap();
+    assert_eq!(near.len(), 2);
+    assert_eq!(near[0]["id"], HBF_ID);
+    assert!(near[0]["distanceM"].as_f64().unwrap() < 1.0);
+    assert!(near[1]["distanceM"].as_f64().unwrap() > near[0]["distanceM"].as_f64().unwrap());
+
+    // The default radius of 250 m leaves Postplatz out.
+    assert_eq!(
+        fixture
+            .ok("/api/near?lat=51.0403&lon=13.7320")
+            .await
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+
+    for uri in [
+        "/api/near",
+        "/api/near?lat=51.0403",
+        "/api/near?lat=51.0403&lon=13.732&radius=99999",
+        "/api/near?lat=okay&lon=13.732",
+        "/api/near?lat=991.0&lon=13.732",
+    ] {
+        assert_eq!(fixture.get(uri).await.0, StatusCode::BAD_REQUEST, "{uri}");
+    }
+}
+
+#[tokio::test]
+async fn at_finds_the_covering_item_and_prefers_the_visit() {
+    let fixture = Fixture::new();
+
+    let inside = fixture.ok("/api/at?ts=2025-06-10T08:22:00Z").await;
+    assert_eq!(inside["item"]["id"], TRAM_ID);
+    assert_eq!(inside["item"]["activityType"], "tram");
+
+    // 08:20 ends the visit and starts the tram ride; the visit is the more specific answer.
+    let boundary = fixture.ok("/api/at?ts=2025-06-10T08:20:00Z").await;
+    assert_eq!(boundary["item"]["id"], VISIT_ID);
+    assert_eq!(boundary["item"]["place"]["id"], HBF_ID);
+
+    // A gap in the recording is an answer, not a 404.
+    let nothing = fixture.ok("/api/at?ts=2020-01-01T00:00:00Z").await;
+    assert!(nothing["item"].is_null());
+
+    assert_eq!(fixture.get("/api/at").await.0, StatusCode::BAD_REQUEST);
+    assert_eq!(
+        fixture.get("/api/at?ts=yesterday").await.0,
+        StatusCode::BAD_REQUEST
+    );
+}
+
+/// pensieve's frontend fetches map data straight from the browser, so every GET has to be
+/// readable cross-origin.
+#[tokio::test]
+async fn cors_allows_any_origin() {
+    let fixture = Fixture::new();
+
+    let (status, _, headers) = fixture
+        .response(
+            Request::builder()
+                .uri("/api/config")
+                .header(header::ORIGIN, "https://pensieve.example")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(headers[header::ACCESS_CONTROL_ALLOW_ORIGIN], "*");
+}
+
+/// `web/dist` is empty in a checkout that never ran the frontend build, and the fallback has
+/// to say so rather than 404 at whoever opened the page.
+#[tokio::test]
+async fn the_ui_falls_back_to_a_note_when_it_was_not_built() {
+    let fixture = Fixture::new();
+
+    let (status, body, _) = fixture.text("/some/client/route").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(
+        body.contains("<!doctype html") || body.contains("was not built"),
+        "{body}"
+    );
+}

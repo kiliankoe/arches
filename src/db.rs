@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 /// The schema version arches writes. Recorded on every ingest run so an old row stays readable.
-pub const SCHEMA_VERSION: i64 = 2;
+pub const SCHEMA_VERSION: i64 = 3;
 
 /// Append-only: never edit a shipped migration, add a new one.
 static MIGRATIONS: LazyLock<Migrations> = LazyLock::new(|| {
@@ -194,6 +194,15 @@ ALTER TABLE ingest_runs ADD COLUMN days_recomputed INTEGER NOT NULL DEFAULT 0;
 UPDATE samples
    SET local_date = strftime('%Y-%m-%d', (date + seconds_from_gmt * 1000) / 1000, 'unixepoch')
  WHERE seconds_from_gmt IS NOT NULL;
+"#,
+        ),
+        M::up(
+            r#"
+-- How much of the day the user has reviewed in Arc. `confirmed` means every item counted on
+-- the day is confirmed, so a consumer can trust the day's places and activity types; the
+-- defaults make an un-derived day look unconfirmed until `arches derive` says otherwise.
+ALTER TABLE day_summaries ADD COLUMN unconfirmed_items INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE day_summaries ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;
 "#,
         ),
     ])

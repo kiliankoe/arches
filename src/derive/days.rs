@@ -7,15 +7,17 @@ use jiff::Timestamp;
 use jiff::civil::Date;
 use rusqlite::{Connection, params};
 
-use super::{dates_in_range, day_start};
+use super::{clipped_ms, dates_in_range};
 use crate::arc::enums::ActivityType;
+use crate::confirmation::{self, Confirmation};
 use crate::geo::haversine_m;
 
 /// Arc sleeps between samples; a longer gap than this is not a straight line someone walked,
 /// so the pair contributes no distance.
 const MAX_SAMPLE_GAP_MS: i64 = 10 * 60 * 1000;
-/// Above this, a fix is noise that would add kilometres a person never moved.
-const MAX_ACCURACY_M: f64 = 200.0;
+/// Above this, a fix is noise that would add kilometres a person never moved. The API drops
+/// the same fixes from the traces it draws.
+pub const MAX_ACCURACY_M: f64 = 200.0;
 /// Visits have no activity type of their own, but the day still spent that time somewhere.
 const STATIONARY: &str = "stationary";
 
@@ -35,6 +37,7 @@ struct Item {
     visit_place_id: Option<String>,
     visit_country_code: Option<String>,
     visit_locality: Option<String>,
+    confirmation: Confirmation,
 }
 
 impl Item {
@@ -47,14 +50,14 @@ impl Item {
             .into_owned()
     }
 
-    /// Milliseconds of this item that fall inside the local day `date`. The two ends use their
-    /// own offsets, so a day that gained or lost an hour to DST is still measured correctly.
-    fn clipped_ms(&self, date: Date, next_date: Date) -> i64 {
-        let window_start = day_start(date, self.start_offset).as_millisecond();
-        let window_end = day_start(next_date, self.end_offset).as_millisecond();
-        let from = self.start_date.max(window_start);
-        let to = self.end_date.min(window_end);
-        (to - from).max(0)
+    fn clipped_ms(&self, date: Date) -> i64 {
+        clipped_ms(
+            self.start_date,
+            self.end_date,
+            self.start_offset,
+            self.end_offset,
+            date,
+        )
     }
 }
 
@@ -99,8 +102,8 @@ pub fn recompute_days(conn: &mut Connection, dates: &[String]) -> Result<usize> 
                  date, utc_offset_seconds, item_count, visit_count, trip_count, sample_count,
                  distance_m, moving_seconds, distance_by_type, duration_by_type, place_ids,
                  country_codes, localities, min_lat, min_lon, max_lat, max_lon,
-                 first_sample_at, last_sample_at, computed_at)
-             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                 first_sample_at, last_sample_at, unconfirmed_items, confirmed, computed_at)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         let mut delete = tx.prepare("DELETE FROM day_summaries WHERE date = ?")?;
 
@@ -154,6 +157,8 @@ pub fn recompute_days(conn: &mut Connection, dates: &[String]) -> Result<usize> 
                 max_lon,
                 summary.first_sample_at,
                 summary.last_sample_at,
+                summary.unconfirmed_items,
+                summary.confirmed,
                 computed_at,
             ])?;
             written += 1;
@@ -179,6 +184,10 @@ struct Summary {
     bbox: Option<(f64, f64, f64, f64)>,
     first_sample_at: Option<i64>,
     last_sample_at: Option<i64>,
+    unconfirmed_items: i64,
+    /// True when every item counted on the day is confirmed, and so trivially true for a day
+    /// that has only samples on it: there is nothing left for the user to review.
+    confirmed: bool,
 }
 
 /// Whether a day happened at all. A sample or an item boundary is evidence that it did; an item
@@ -197,19 +206,22 @@ fn summarize(
     samples: &[Sample],
     places: &HashMap<String, PlaceInfo>,
 ) -> Summary {
-    let next_date = date.tomorrow().unwrap_or(date);
     let by_id: HashMap<&str, &&Item> = items.iter().map(|item| (item.id.as_str(), item)).collect();
 
     let mut duration_by_type: BTreeMap<String, i64> = BTreeMap::new();
     let mut moving_seconds = 0;
     let (mut visit_count, mut trip_count) = (0, 0);
+    let mut unconfirmed_items = 0;
     let mut place_ids: Vec<String> = Vec::new();
     let mut country_codes: Vec<String> = Vec::new();
     let mut localities: Vec<String> = Vec::new();
 
     for item in items {
-        let seconds = item.clipped_ms(date, next_date) / 1000;
+        let seconds = item.clipped_ms(date) / 1000;
         *duration_by_type.entry(item.type_name()).or_default() += seconds;
+        if !item.confirmation.confirmed {
+            unconfirmed_items += 1;
+        }
         if item.is_visit {
             visit_count += 1;
             let place = item
@@ -301,6 +313,8 @@ fn summarize(
         // Not the first and last of the slice: it is ordered by item, not by time.
         first_sample_at: samples.iter().map(|sample| sample.date).min(),
         last_sample_at: samples.iter().map(|sample| sample.date).max(),
+        unconfirmed_items,
+        confirmed: unconfirmed_items == 0,
     }
 }
 
@@ -313,16 +327,17 @@ fn push_distinct(values: &mut Vec<String>, value: &str) {
 /// Deleted items are Arc's removal tombstones and disabled ones are what the user switched off;
 /// neither is part of the day that happened.
 fn load_items(conn: &Connection, min: &str, max: &str) -> Result<Vec<Item>> {
-    let mut statement = conn.prepare(
+    let columns = confirmation::COLUMNS;
+    let mut statement = conn.prepare(&format!(
         "SELECT id, is_visit, start_date, end_date, start_offset_seconds, end_offset_seconds,
                 activity_type, local_start_date, local_end_date, visit_place_id,
-                visit_country_code, visit_locality
+                visit_country_code, visit_locality, {columns}
          FROM items
          WHERE coalesce(deleted, 0) = 0 AND coalesce(disabled, 0) = 0
            AND local_start_date IS NOT NULL AND local_end_date IS NOT NULL
            AND local_start_date <= ? AND local_end_date >= ?
-         ORDER BY start_date, id",
-    )?;
+         ORDER BY start_date, id"
+    ))?;
     let items = statement
         .query_map(params![max, min], |row| {
             Ok(Item {
@@ -338,6 +353,7 @@ fn load_items(conn: &Connection, min: &str, max: &str) -> Result<Vec<Item>> {
                 visit_place_id: row.get(9)?,
                 visit_country_code: row.get(10)?,
                 visit_locality: row.get(11)?,
+                confirmation: Confirmation::from_row(row, 12)?,
             })
         })?
         .collect::<Result<_, _>>()?;
@@ -405,6 +421,8 @@ mod tests {
         bbox: Option<(f64, f64, f64, f64)>,
         first_sample_at: Option<i64>,
         last_sample_at: Option<i64>,
+        unconfirmed_items: i64,
+        confirmed: bool,
     }
 
     fn row(conn: &Connection, date: &str) -> Option<Row> {
@@ -412,7 +430,7 @@ mod tests {
             "SELECT utc_offset_seconds, item_count, visit_count, trip_count, sample_count,
                     distance_m, moving_seconds, distance_by_type, duration_by_type, place_ids,
                     country_codes, localities, min_lat, min_lon, max_lat, max_lon,
-                    first_sample_at, last_sample_at
+                    first_sample_at, last_sample_at, unconfirmed_items, confirmed
              FROM day_summaries WHERE date = ?",
             params![date],
             |row| {
@@ -442,6 +460,8 @@ mod tests {
                     bbox,
                     first_sample_at: row.get(16)?,
                     last_sample_at: row.get(17)?,
+                    unconfirmed_items: row.get(18)?,
+                    confirmed: row.get(19)?,
                 })
             },
         )
@@ -999,6 +1019,66 @@ mod tests {
         let day = row(&conn, "2025-06-10").unwrap();
         assert_eq!(day.first_sample_at, Some(millis("2025-06-10T06:30:00Z")));
         assert_eq!(day.last_sample_at, Some(millis("2025-06-10T18:30:00Z")));
+    }
+
+    /// A consumer reads `confirmed` to know whether the day's places and activity types are
+    /// the user's own or still Arc's guesses.
+    #[test]
+    fn a_day_is_confirmed_only_once_every_item_on_it_is() {
+        let mut conn = db::open_in_memory().unwrap();
+        insert_item(
+            &conn,
+            "visit",
+            true,
+            "2025-06-10T06:00:00Z",
+            "2025-06-10T07:00:00Z",
+        );
+        insert_item(
+            &conn,
+            "trip",
+            false,
+            "2025-06-10T07:00:00Z",
+            "2025-06-10T08:00:00Z",
+        );
+        insert_sample(&conn, "s1", "visit", "2025-06-10T06:30:00Z", Some(7200));
+        insert_sample(&conn, "s2", "trip", "2025-06-10T07:30:00Z", Some(7200));
+        conn.execute(
+            "UPDATE items SET visit_confirmed_place = 1 WHERE id = 'visit'",
+            [],
+        )
+        .unwrap();
+
+        derive(&mut conn, &["visit", "trip"], &["2025-06-10"]);
+
+        // The trip has no confirmed activity type yet, so the day is not reviewed.
+        let day = row(&conn, "2025-06-10").unwrap();
+        assert_eq!(day.unconfirmed_items, 1);
+        assert!(!day.confirmed);
+
+        conn.execute(
+            "UPDATE items SET trip_confirmed_activity_type = 24 WHERE id = 'trip'",
+            [],
+        )
+        .unwrap();
+        derive(&mut conn, &["visit", "trip"], &["2025-06-10"]);
+
+        let day = row(&conn, "2025-06-10").unwrap();
+        assert_eq!(day.unconfirmed_items, 0);
+        assert!(day.confirmed);
+    }
+
+    /// A day of nothing but samples has nothing to review.
+    #[test]
+    fn a_day_without_items_is_confirmed() {
+        let mut conn = db::open_in_memory().unwrap();
+        insert_sample(&conn, "s1", "gone", "2025-06-10T06:30:00Z", Some(7200));
+
+        derive(&mut conn, &[], &["2025-06-10"]);
+
+        let day = row(&conn, "2025-06-10").unwrap();
+        assert_eq!(day.item_count, 0);
+        assert_eq!(day.unconfirmed_items, 0);
+        assert!(day.confirmed);
     }
 
     #[test]

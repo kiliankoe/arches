@@ -1,6 +1,7 @@
 mod api;
 mod arc;
 mod config;
+mod confirmation;
 mod db;
 mod derive;
 mod geo;
@@ -38,7 +39,13 @@ enum Command {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    tracing_subscriber::fmt::init();
+    // Info by default: a launchd service with no RUST_LOG set should still say what it did.
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
+        .init();
 
     let cli = Cli::parse();
     match cli.command {
@@ -156,6 +163,7 @@ async fn serve() -> anyhow::Result<()> {
     let config = config::Config::from_env()?;
     // Everything arches writes goes here; created eagerly so phase 2's ingest can assume it exists.
     std::fs::create_dir_all(&config.data_dir)?;
+    let db_path = config.db_path();
     tracing::info!(
         arc_dir = %config.arc_dir.display(),
         data_dir = %config.data_dir.display(),
@@ -163,10 +171,13 @@ async fn serve() -> anyhow::Result<()> {
         "starting arches"
     );
 
-    let state = api::AppState::new(&config.map_style);
+    let bind = config.bind.clone();
+    // Ingest gets its own connection for the life of the process; readers open their own.
+    let state = api::AppState::new(config, db::open(&db_path)?);
+    state.spawn_periodic_ingest();
     let app = api::router(state);
 
-    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
     axum::serve(listener, app).await?;
     Ok(())

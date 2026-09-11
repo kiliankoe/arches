@@ -143,6 +143,63 @@ September 2026, a first run over three years of data derived 13 841 items and
 `arches derive` took 6.1 s. A run that finds no changed bucket recomputes
 nothing.
 
+## Confirmation
+
+Arc marks whether the user has reviewed an item: a visit is confirmed once its
+place is picked, a trip once it has a confirmed activity type, which Arc leaves
+unset until someone says so. Until then the place and the activity type are the
+app's guesses and may change under a consumer's feet. Both flags travel with
+every item as `confirmed` and `uncertain`, and a day summary carries
+`unconfirmedItems` plus a `confirmed` that is true only when every item counted
+on that day is confirmed. A day with no items at all is confirmed: there is
+nothing left to review. The most recent days are usually unconfirmed, since the
+backup on disk tends to predate the review.
+
+## API
+
+Everything lives under `/api` and speaks JSON, except the GeoJSON and GPX
+renderings. Keys are camelCase, dates in paths and query strings are local
+`YYYY-MM-DD`, timestamps in responses are RFC 3339 strings, activity types are
+their enum names and local offsets appear as `utcOffsetSeconds`. Errors are
+`{ "error": "..." }` with 400 for a bad parameter, 404 for an id or date that
+is not there and 500 otherwise, the cause logged rather than returned. CORS
+allows any origin for GET and POST without credentials: the API is tailnet-only
+with no auth and pensieve's browser frontend fetches from it directly.
+
+| Endpoint | |
+| --- | --- |
+| `GET /api/status` | Version, last ingest run, Arc's `lastBackupDate`, newest bucket mtime, row counts, summarized date range and whether a pass is running. |
+| `GET /api/config` | The MapLibre style URL the frontend renders with. |
+| `POST /api/ingest` | Runs one pass now and returns its summary; queues behind the periodic one. |
+| `GET /api/days?from=&to=` | Day summaries in an inclusive range, default the last 30 days, at most 400. Days with no row are absent. |
+| `GET /api/days/{date}` | The day's summary plus its items in start order, each with the seconds it spent inside that day. |
+| `GET /api/days/{date}/geojson?simplify=` | FeatureCollection: a LineString per trip from its fixes, a Point per visit. |
+| `GET /api/days/{date}.gpx` | GPX 1.1, a `<wpt>` per visit and a `<trk>` per trip. |
+| `GET /api/items/{id}` | One item, with its place if it is a visit. |
+| `GET /api/items/{id}/samples?simplify=` | The item's fixes in time order. |
+| `GET /api/places?q=&country=&limit=` | Places by name, locality or street address, most visited first. |
+| `GET /api/places/{id}` | One place. |
+| `GET /api/places/{id}/visits?from=&to=&limit=` | Visits there, newest first. |
+| `GET /api/near?lat=&lon=&radius=` | Places within a radius in metres (default 250, max 5000), nearest first, each with `distanceM`. |
+| `GET /api/at?ts=` | The item covering an instant, preferring the visit; `{ "item": null }` when nothing does, not a 404. |
+
+`simplify=<metres>` runs Ramer-Douglas-Peucker over the coordinate chain with
+that tolerance, measured on a local equirectangular projection so the number is
+metres rather than degrees. Without it the full trace is returned. A trace drops
+fixes worse than 200 m of horizontal accuracy, the same ones the derivation
+refuses to measure distance from.
+
+The React UI is embedded in the binary and served at `/`, with any path that is
+not a file and not under `/api` falling back to `index.html` so client-side
+routes deep-link. `web/dist` is gitignored, so a checkout that never ran
+`pnpm --dir web build` still builds: `build.rs` creates the directory and `/`
+answers with a plain note saying the UI is not in this binary.
+
+While `arches serve` is running, ingest polls Arc's buckets every
+`ARCHES_INGEST_INTERVAL`, starting immediately. It runs on a connection of its
+own; requests read through separate connections, which WAL lets them do while a
+pass is writing.
+
 ## Development
 
 This project uses a Nix flake and direnv:
@@ -184,3 +241,4 @@ All configuration is via environment variables:
 | `ARCHES_BIND`             | `127.0.0.1:8471`                                                                       | Address the HTTP API binds to.             |
 | `ARCHES_MAP_STYLE`        | `https://tiles.openfreemap.org/styles/liberty`                                        | MapLibre style URL served to the frontend. |
 | `ARCHES_INGEST_INTERVAL`  | `15m`                                                                                  | How often ingest polls Arc's buckets (`s`/`m`/`h` suffix). |
+| `RUST_LOG`                | `info`                                                                                 | Log filter (tracing `EnvFilter` syntax). |

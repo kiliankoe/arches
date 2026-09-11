@@ -322,7 +322,7 @@ mod tests {
         let backup = fixture_backup();
         let items = read_items(&backup.item_files().unwrap()[0].path).unwrap();
 
-        assert_eq!(items.len(), 4);
+        assert_eq!(items.len(), 5);
         assert!(items[0].is_visit());
         assert_eq!(items[0].activity_type(), None);
         assert_eq!(
@@ -333,6 +333,8 @@ mod tests {
         assert_eq!(items[1].activity_type(), Some(ActivityType::Tram));
         assert!(items[1].activity_type().unwrap().is_moving_type());
         assert_eq!(items[3].activity_type(), Some(ActivityType::Other(99)));
+        // The walk was never confirmed, so the classifier's guess is all there is.
+        assert_eq!(items[4].activity_type(), Some(ActivityType::Walking));
     }
 
     #[test]
@@ -341,7 +343,7 @@ mod tests {
         let files = backup.sample_files().unwrap();
 
         let gz = read_samples(&files[0].path).unwrap();
-        assert_eq!(gz.len(), 10);
+        assert_eq!(gz.len(), 15);
         assert_eq!(gz[0].moving_state, Some(MovingState::Moving));
         assert_eq!(gz[0].recording_state, Some(RecordingState::Recording));
         assert_eq!(gz[0].classified_activity_type, Some(ActivityType::Tram));

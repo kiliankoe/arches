@@ -25,7 +25,7 @@ Backend, from the repo root inside `nix develop` (or direnv):
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo run -- serve
+cargo run -- serve       # HTTP API on ARCHES_BIND, plus ingest on a timer
 cargo run -- ingest          # one ingest pass; set ARCHES_DATA_DIR to a temp dir when trying it
 cargo run -- derive          # rebuild every item offset and day summary from scratch
 cargo run -- status --json

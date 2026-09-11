@@ -322,7 +322,8 @@ mod tests {
         let backup = fixture_backup();
         let items = read_items(&backup.item_files().unwrap()[0].path).unwrap();
 
-        assert_eq!(items.len(), 5);
+        // Five on the 10th, plus the flight of the 12th with a visit either side of it.
+        assert_eq!(items.len(), 9);
         assert!(items[0].is_visit());
         assert_eq!(items[0].activity_type(), None);
         assert_eq!(
@@ -355,13 +356,17 @@ mod tests {
         assert!(gz[9].heart_rate.is_none());
 
         let plain = read_samples(&files[1].path).unwrap();
-        assert_eq!(plain.len(), 2);
+        assert_eq!(plain.len(), 8);
         assert_eq!(
             plain[1].confirmed_activity_type,
             Some(ActivityType::Other(99))
         );
         assert!(plain[1].latitude.is_none());
         assert!(plain[1].seconds_from_gmt.is_none());
+        assert_eq!(
+            plain[3].confirmed_activity_type,
+            Some(ActivityType::Airplane)
+        );
     }
 
     #[test]

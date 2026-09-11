@@ -218,6 +218,52 @@ on that day is confirmed. A day with no items at all is confirmed: there is
 nothing left to review. The most recent days are usually unconfirmed, since the
 backup on disk tends to predate the review.
 
+## Highlights
+
+`/api/highlights` turns what is already recorded into the handful of events
+worth a line in a feed or a journal, derived per request rather than stored:
+kilko.de is meant to pick them up later. Four kinds, each an object with
+`kind`, `date`, `title`, `confirmed` and its own fields:
+
+| Kind | |
+| --- | --- |
+| `country` | The first local day a country code appears in a day summary, with `countryCode` and `country`, the ISO 3166-1 English short name. |
+| `locality` | The same for a locality, with `locality` and, when the day touched exactly one country, `countryCode`. |
+| `flight` | A trip whose resolved activity type is `airplane`, with `itemId`, `distanceM`, `durationSeconds` and `from` and `to` as `{ locality, countryCode, placeName }`. |
+| `longest` | The longest walk, run, ride and hike of the range, each at least a kilometre, with `itemId`, `activityType`, `distanceM` and `durationSeconds`. |
+
+Country codes are reported in the uppercase ISO 3166-1 writes, on a first
+time and on a flight's endpoints alike: Arc stores whichever case the source
+had, so the same country arrives as `de` from a place and `DE` from a visit,
+and comparing them raw reported Germany twice.
+
+"First" means first over all of history, not first in the range: a country or
+a town first seen before `from` is not reported however often it comes back.
+That is why the endpoint reads every day summary up to `to` rather than only
+the ones in the range; at about a thousand rows a year that is cheaper than
+keeping a table of firsts in step with a backup Arc rewrites retroactively.
+Localities repeat across countries, so a first time is keyed on the pair: the
+Paris in Texas is its own event. A day that touched two countries cannot say
+which one a name belongs to, so it only counts if the name is new outright.
+
+A flight has to be at least 50 km: Arc types the taxi to the runway and split
+legs of a few hundred metres as airplane too, and those are not flights anyone
+would put in a feed. A flight's endpoints are the nearest visit before and after it, found by
+walking up to three `previousItemId` / `nextItemId` links past non-visits,
+because a walk through the terminal between the gate and the flight is normal.
+Anything further away is not the airport any more and the endpoint is null,
+which makes the title fall back from "Flight from Dresden to Lisboa" to the
+distance.
+
+Every highlight carries `confirmed`: the day's flag for a first time, the
+item's for a flight or a longest trip (see *Confirmation* above). **Filtering
+on it is the consumer's job.** A public feed should drop what has not been
+reviewed yet, since the place or the activity type behind it can still change;
+`?confirmed=true` does that server-side for a consumer that would rather not
+think about it. `kinds=` takes any comma-separated subset of the four, in any
+order; `from` and `to` are both required and at most 400 days apart. Events
+come back sorted by date, then by kind in the order above, then by title.
+
 ## API
 
 Everything lives under `/api` and speaks JSON, except the GeoJSON and GPX
@@ -246,6 +292,7 @@ with no auth and pensieve's browser frontend fetches from it directly.
 | `GET /api/near?lat=&lon=&radius=` | Places within a radius in metres (default 250, max 5000), nearest first, each with `distanceM`. |
 | `GET /api/at?ts=` | The item covering an instant, preferring the visit; `{ "item": null }` when nothing does, not a 404. |
 | `GET /api/heatmap?bbox=&zoom=&from=&to=&weight=` | Everywhere you have been in a range, binned for the viewport: a FeatureCollection of cell-centre Points with a `weight`, plus a `meta` member. `bbox` and `zoom` are required. See *Heatmap* above. |
+| `GET /api/highlights?from=&to=&kinds=&confirmed=` | The notable events of a range: first time in a country or a town, flights, the longest trip per activity type. `from` and `to` are required and at most 400 days apart. See *Highlights* above. |
 
 `simplify=<metres>` runs Ramer-Douglas-Peucker over the coordinate chain with
 that tolerance, measured on a local equirectangular projection so the number is
@@ -279,6 +326,7 @@ becomes a bottom sheet.
 | `/week/{yyyy-Www}` | Seven 24 hour strips, one per ISO-week day, items drawn as blocks by clipped time. |
 | `/place/{id}` | One place, its address and counts, and its visits newest first. |
 | `/heat?from=&to=&weight=` | The heatmap over a range of days, with presets, two date inputs and a days/samples toggle. Both travel in the URL. |
+| `/highlights?from=&to=` | The notable events of a range, grouped by month, each linking to its day; an unconfirmed one is marked with a dashed rule. |
 
 Every route deep-links; unknown paths fall back to the shell, so the browser's
 address bar is a usable input. In the day view the left and right arrow keys

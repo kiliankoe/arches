@@ -8,16 +8,9 @@ import Rail from "../components/Rail";
 import TopBar from "../components/TopBar";
 import { isoWeekOf, monthOf, today } from "../lib/dates";
 import { formatCount } from "../lib/format";
-import {
-  type HeatRange,
-  type HeatWeight,
-  heatSearch,
-  matchingPreset,
-  PRESETS,
-  parseHeatParams,
-  presetRange,
-} from "../lib/heat";
+import { type HeatWeight, heatSearch, parseHeatParams } from "../lib/heat";
 import { heatLegendGradient } from "../lib/heatLayer";
+import { type DateRange, matchingPreset, PRESETS, presetRange } from "../lib/range";
 import { useScene } from "../scene";
 
 /** Long enough to sit out a flick of the wheel, short enough that a pan feels answered. */
@@ -80,7 +73,7 @@ export default function HeatView() {
   );
   useScene(scene);
 
-  const update = (next: HeatRange, nextWeight: HeatWeight) =>
+  const update = (next: DateRange, nextWeight: HeatWeight) =>
     setSearch(heatSearch(next, nextWeight).replace(/^\?/, ""), { replace: true });
   const selected = matchingPreset(range, now);
   const meta = heat?.meta;
@@ -91,6 +84,7 @@ export default function HeatView() {
         <Link to={`/day/${now}`}>Today</Link>
         <Link to={`/week/${isoWeekOf(now)}`}>Week</Link>
         <Link to={`/month/${monthOf(now)}`}>Month</Link>
+        <Link to="/highlights">Highlights</Link>
       </TopBar>
       <Rail>
         <div className="heat-rail">

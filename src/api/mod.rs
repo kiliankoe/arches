@@ -17,6 +17,7 @@ mod error;
 mod geojson;
 mod gpx;
 mod heatmap;
+mod highlights;
 mod items;
 mod model;
 mod places;
@@ -139,6 +140,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/near", get(places::near))
         .route("/api/at", get(at::at))
         .route("/api/heatmap", get(heatmap::get))
+        .route("/api/highlights", get(highlights::get))
         .fallback(assets::serve)
         .layer(cors)
         .layer(CompressionLayer::new())

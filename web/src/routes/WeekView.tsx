@@ -63,6 +63,7 @@ export default function WeekView() {
         <Link to={`/week/${isoWeekOf(today())}`}>This week</Link>
         <Link to={`/day/${today()}`}>Today</Link>
         <Link to="/heat">Heatmap</Link>
+        <Link to="/highlights">Highlights</Link>
       </TopBar>
       <Rail wide>
         {days.error ? (

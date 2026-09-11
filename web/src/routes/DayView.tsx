@@ -102,6 +102,7 @@ export default function DayView() {
         <Link to={`/week/${isoWeekOf(date)}`}>Week</Link>
         <Link to={`/month/${monthOf(date)}`}>Month</Link>
         <Link to="/heat">Heatmap</Link>
+        <Link to="/highlights">Highlights</Link>
       </TopBar>
       <Rail footer={<StatusLine onIngested={day.reload} />}>
         {failure ? (

@@ -5,6 +5,7 @@ mod confirmation;
 mod db;
 mod derive;
 mod geo;
+mod highlights;
 mod ingest;
 mod status;
 

@@ -166,6 +166,43 @@ export type HeatGeoJson = {
   meta: HeatMeta;
 };
 
+export type HighlightKind = "country" | "locality" | "flight" | "longest";
+
+/** Where a flight left from or arrived at, as far as the neighbouring visit knows. */
+export type HighlightEndpoint = {
+  locality: string | null;
+  countryCode: string | null;
+  placeName: string | null;
+};
+
+/**
+ * One notable event. The kind decides which of the extra fields are there; `confirmed` says
+ * whether the data behind it has been reviewed in Arc, and it is up to the reader what to do
+ * with an event that has not been.
+ */
+export type Highlight = {
+  kind: HighlightKind;
+  date: string;
+  title: string;
+  confirmed: boolean;
+  countryCode?: string | null;
+  country?: string | null;
+  locality?: string;
+  itemId?: string;
+  activityType?: string;
+  distanceM?: number | null;
+  durationSeconds?: number;
+  from?: HighlightEndpoint | null;
+  to?: HighlightEndpoint | null;
+};
+
+export type HighlightQuery = {
+  from: string;
+  to: string;
+  kinds?: HighlightKind[];
+  confirmed?: boolean;
+};
+
 export type HeatQuery = {
   bbox: Bbox;
   zoom: number;
@@ -229,6 +266,16 @@ export const api = {
   place: (id: string) => request<Place>(`/places/${encodeURIComponent(id)}`),
   placeVisits: (id: string, limit?: number) =>
     request<Item[]>(`/places/${encodeURIComponent(id)}/visits${query({ limit })}`),
+  highlights: ({ from, to, kinds, confirmed }: HighlightQuery, signal?: AbortSignal) =>
+    request<Highlight[]>(
+      `/highlights${query({
+        from,
+        to,
+        kinds: kinds?.join(","),
+        confirmed: confirmed ? "true" : undefined,
+      })}`,
+      { signal },
+    ),
   heatmap: ({ bbox, zoom, from, to, weight }: HeatQuery, signal?: AbortSignal) =>
     request<HeatGeoJson>(
       `/heatmap${query({

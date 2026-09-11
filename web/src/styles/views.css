@@ -358,3 +358,17 @@ a.item-title:hover {
   display: flex;
   justify-content: space-between;
 }
+
+/* Highlights. The same rows the timeline uses, under a heading per month. */
+
+.highlight-month {
+  position: sticky;
+  top: 0;
+  padding: 10px 16px 4px;
+  font-size: var(--size-1);
+  font-weight: 400;
+  color: var(--ink-3);
+  background: var(--panel-solid);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}

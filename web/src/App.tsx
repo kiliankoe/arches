@@ -6,6 +6,7 @@ import { useResource } from "./hooks";
 import { today } from "./lib/dates";
 import DayView from "./routes/DayView";
 import HeatView from "./routes/HeatView";
+import HighlightsView from "./routes/HighlightsView";
 import MonthView from "./routes/MonthView";
 import PlaceView from "./routes/PlaceView";
 import WeekView from "./routes/WeekView";
@@ -55,6 +56,7 @@ export default function App() {
           <Route path="/week/:week" element={<WeekView />} />
           <Route path="/place/:id" element={<PlaceView />} />
           <Route path="/heat" element={<HeatView />} />
+          <Route path="/highlights" element={<HighlightsView />} />
           <Route path="*" element={<Navigate to={`/day/${today()}`} replace />} />
         </Routes>
       </div>

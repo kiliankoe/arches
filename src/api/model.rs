@@ -23,7 +23,7 @@ const ITEM_COLUMNS: &str = "id, is_visit, start_date, end_date, local_start_date
 
 /// Arc keeps removed items as tombstones and the user can switch an item off; neither is part
 /// of the timeline that happened, here or in the derivation.
-const LIVE_ITEM: &str = "coalesce(deleted, 0) = 0 AND coalesce(disabled, 0) = 0";
+pub const LIVE_ITEM: &str = "coalesce(deleted, 0) = 0 AND coalesce(disabled, 0) = 0";
 
 pub struct ItemRow {
     pub id: String,

@@ -19,6 +19,7 @@ const VISIT_ID: &str = "B1000000-0000-4000-8000-000000000101";
 const TRAM_ID: &str = "B2000000-0000-4000-8000-000000000102";
 const WALK_ID: &str = "B5000000-0000-4000-8000-000000000105";
 const HBF_ID: &str = "A1000000-0000-4000-8000-000000000001";
+const FLIGHT_ID: &str = "B7000000-0000-4000-8000-000000000107";
 /// A viewport around the fixture's corner of Dresden.
 const DRESDEN: &str = "bbox=13.70,51.03,13.76,51.06";
 
@@ -110,9 +111,10 @@ async fn status_reports_the_run_and_the_counts_with_rfc_3339_dates() {
     let status = fixture.ok("/api/status").await;
 
     assert_eq!(status["version"], env!("CARGO_PKG_VERSION"));
-    assert_eq!(status["counts"]["items"], 5);
+    // The 10th has five items, the 12th the flight and its neighbours.
+    assert_eq!(status["counts"]["items"], 9);
     assert_eq!(status["counts"]["places"], 2);
-    assert_eq!(status["counts"]["samples"], 17);
+    assert_eq!(status["counts"]["samples"], 23);
     assert!(status["counts"]["heatmapCells"].as_u64().unwrap() > 15);
     assert_eq!(status["ingestRunning"], false);
     assert_eq!(status["firstSummarizedDate"], DAY);
@@ -197,11 +199,11 @@ async fn confirmation_flags_travel_from_items_to_days() {
     assert_eq!(by_id(WALK_ID)["confirmed"], false);
     assert_eq!(by_id(WALK_ID)["uncertain"], true);
 
-    // A day of nothing but samples has nothing left to review.
-    let quiet = fixture.ok("/api/days/2025-06-12").await;
-    assert_eq!(quiet["summary"]["itemCount"], 0);
-    assert_eq!(quiet["summary"]["confirmed"], true);
-    assert_eq!(quiet["summary"]["unconfirmedItems"], 0);
+    // The second day is the flight and its neighbours; only the arrival is still unreviewed.
+    let second = fixture.ok("/api/days/2025-06-12").await;
+    assert_eq!(second["summary"]["itemCount"], 4);
+    assert_eq!(second["summary"]["confirmed"], false);
+    assert_eq!(second["summary"]["unconfirmedItems"], 1);
 }
 
 #[tokio::test]
@@ -684,6 +686,117 @@ async fn heatmap_rejects_a_missing_or_broken_viewport() {
         &format!("/api/heatmap?{DRESDEN}&zoom=12&weight=hours"),
         &format!("/api/heatmap?{DRESDEN}&zoom=12&from=last-week"),
         &format!("/api/heatmap?{DRESDEN}&zoom=12&from=2025-06-12&to=2025-06-10"),
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert!(body["error"].is_string(), "{uri}: {body}");
+    }
+}
+
+/// The fixture is a day in Dresden and, two days later, a flight to Prague: the first time in
+/// both countries and both cities, one flight and one walk long enough to be worth reporting.
+#[tokio::test]
+async fn highlights_report_first_times_flights_and_the_longest_trip() {
+    let fixture = Fixture::new();
+
+    let events = fixture
+        .ok("/api/highlights?from=2025-06-01&to=2025-06-30")
+        .await;
+
+    let events = events.as_array().unwrap();
+    let titles: Vec<&str> = events
+        .iter()
+        .map(|event| event["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        titles,
+        [
+            "First time in Germany",
+            "First time in Dresden",
+            "First time in Czechia",
+            "First time in Praha",
+            "Flight from Dresden to Praha",
+            "Longest walk: 1.4 km",
+        ],
+        "{events:#?}"
+    );
+
+    let germany = &events[0];
+    assert_eq!(germany["kind"], "country");
+    assert_eq!(germany["date"], DAY);
+    // Uppercase as ISO 3166-1 writes it, whichever way round Arc happened to store it.
+    assert_eq!(germany["countryCode"], "DE");
+    // Two of the day's items are still unreviewed, so the day is not final and nor is this.
+    assert_eq!(germany["confirmed"], false);
+    // Only Germany was recorded on the 10th, so the locality's country is not in doubt.
+    assert_eq!(events[1]["locality"], "Dresden");
+    assert_eq!(events[1]["countryCode"], "DE");
+    // The 12th touched two countries, so there is no telling which one Praha is in.
+    assert!(events[3]["countryCode"].is_null());
+
+    let flight = &events[4];
+    assert_eq!(flight["date"], "2025-06-12");
+    assert_eq!(flight["itemId"], FLIGHT_ID);
+    assert_eq!(flight["distanceM"], 120_000.0);
+    assert_eq!(flight["durationSeconds"], 5100);
+    assert_eq!(flight["from"]["locality"], "Dresden");
+    assert_eq!(flight["from"]["placeName"], "Dresden Airport");
+    // The arrival is a visit past the walk out of the terminal, not the flight's own neighbour.
+    assert_eq!(flight["to"]["locality"], "Praha");
+    assert_eq!(flight["to"]["countryCode"], "CZ");
+    assert_eq!(flight["confirmed"], true);
+
+    let walk = &events[5];
+    assert_eq!(walk["activityType"], "walking");
+    assert_eq!(walk["distanceM"], 1400.0);
+
+    // A range before any of it happened is an empty feed, not a 404.
+    let empty = fixture
+        .ok("/api/highlights?from=2025-01-01&to=2025-01-31")
+        .await;
+    assert!(empty.as_array().unwrap().is_empty(), "{empty}");
+}
+
+/// A first time is first over all of history: the same range asked for later reports nothing.
+#[tokio::test]
+async fn highlights_filter_by_kind_and_by_confirmation() {
+    let fixture = Fixture::new();
+
+    let later = fixture
+        .ok("/api/highlights?from=2025-06-11&to=2025-06-30&kinds=country")
+        .await;
+    let later = later.as_array().unwrap();
+    assert_eq!(later.len(), 1);
+    assert_eq!(later[0]["countryCode"], "CZ");
+
+    let two = fixture
+        .ok("/api/highlights?from=2025-06-01&to=2025-06-30&kinds=flight,longest")
+        .await;
+    assert_eq!(two.as_array().unwrap().len(), 2);
+
+    // The flight and the walk are confirmed items; both days are still unreviewed.
+    let reviewed = fixture
+        .ok("/api/highlights?from=2025-06-01&to=2025-06-30&confirmed=true")
+        .await;
+    let reviewed = reviewed.as_array().unwrap();
+    assert_eq!(reviewed.len(), 2, "{reviewed:#?}");
+    assert!(reviewed.iter().all(|event| event["confirmed"] == true));
+}
+
+#[tokio::test]
+async fn highlights_reject_a_missing_or_broken_range() {
+    let fixture = Fixture::new();
+
+    for uri in [
+        "/api/highlights",
+        "/api/highlights?from=2025-06-01",
+        "/api/highlights?to=2025-06-30",
+        "/api/highlights?from=yesterday&to=2025-06-30",
+        "/api/highlights?from=2025-06-30&to=2025-06-01",
+        "/api/highlights?from=2020-01-01&to=2025-01-01",
+        "/api/highlights?from=2025-06-01&to=2025-06-30&kinds=weather",
+        "/api/highlights?from=2025-06-01&to=2025-06-30&kinds=",
+        "/api/highlights?from=2025-06-01&to=2025-06-30&confirmed=maybe",
     ] {
         let (status, body) = fixture.get(uri).await;
         assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");

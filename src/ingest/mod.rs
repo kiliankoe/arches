@@ -457,14 +457,14 @@ mod tests {
         assert_eq!(summary.files_seen, 4);
         assert_eq!(summary.files_ingested, 4);
         assert_eq!(summary.places_upserted, 2);
-        assert_eq!(summary.items_upserted, 5);
-        assert_eq!(summary.samples_upserted, 17);
+        assert_eq!(summary.items_upserted, 9);
+        assert_eq!(summary.samples_upserted, 23);
         assert_eq!(summary.device_id.as_deref(), Some(DEVICE));
         assert!(summary.error.is_none(), "{:?}", summary.error);
 
         assert_eq!(fixture.count("places"), 2);
-        assert_eq!(fixture.count("items"), 5);
-        assert_eq!(fixture.count("samples"), 17);
+        assert_eq!(fixture.count("items"), 9);
+        assert_eq!(fixture.count("samples"), 23);
         assert_eq!(fixture.count("ingest_files"), 4);
 
         for relative in [

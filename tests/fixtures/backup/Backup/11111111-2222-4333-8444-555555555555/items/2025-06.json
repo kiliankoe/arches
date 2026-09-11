@@ -1,64 +1,64 @@
 [
   {
-    "base" : {
-      "id" : "B1000000-0000-4000-8000-000000000101",
-      "isVisit" : true,
-      "startDate" : "2025-06-10T08:00:00Z",
-      "endDate" : "2025-06-10T08:20:00Z",
-      "source" : "LocoKit2",
-      "sourceVersion" : "9.0.0",
-      "disabled" : false,
-      "deleted" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "previousItemId" : null,
-      "nextItemId" : "B2000000-0000-4000-8000-000000000102",
-      "samplesChanged" : false,
-      "locked" : false,
-      "stepCount" : 320,
-      "averageHeartRate" : 78.5
+    "base": {
+      "id": "B1000000-0000-4000-8000-000000000101",
+      "isVisit": true,
+      "startDate": "2025-06-10T08:00:00Z",
+      "endDate": "2025-06-10T08:20:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "previousItemId": null,
+      "nextItemId": "B2000000-0000-4000-8000-000000000102",
+      "samplesChanged": false,
+      "locked": false,
+      "stepCount": 320,
+      "averageHeartRate": 78.5
     },
-    "visit" : {
-      "itemId" : "B1000000-0000-4000-8000-000000000101",
-      "latitude" : 51.0403,
-      "longitude" : 13.732,
-      "radiusMean" : 60.0,
-      "radiusSD" : 15.0,
-      "placeId" : "A1000000-0000-4000-8000-000000000001",
-      "confirmedPlace" : true,
-      "uncertainPlace" : false,
-      "customTitle" : null,
-      "streetAddress" : "Wiener Platz 4",
-      "locality" : "Dresden",
-      "countryCode" : "de",
-      "lastSaved" : "2025-06-10T09:58:00Z"
+    "visit": {
+      "itemId": "B1000000-0000-4000-8000-000000000101",
+      "latitude": 51.0403,
+      "longitude": 13.732,
+      "radiusMean": 60.0,
+      "radiusSD": 15.0,
+      "placeId": "A1000000-0000-4000-8000-000000000001",
+      "confirmedPlace": true,
+      "uncertainPlace": false,
+      "customTitle": null,
+      "streetAddress": "Wiener Platz 4",
+      "locality": "Dresden",
+      "countryCode": "de",
+      "lastSaved": "2025-06-10T09:58:00Z"
     }
   },
   {
-    "base" : {
-      "id" : "B2000000-0000-4000-8000-000000000102",
-      "isVisit" : false,
-      "startDate" : "2025-06-10T08:20:00Z",
-      "endDate" : "2025-06-10T08:28:00Z",
-      "source" : "LocoKit2",
-      "sourceVersion" : "9.0.0",
-      "disabled" : false,
-      "deleted" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "previousItemId" : "B1000000-0000-4000-8000-000000000101",
-      "nextItemId" : "B3000000-0000-4000-8000-000000000103",
-      "samplesChanged" : false,
-      "locked" : false,
-      "averageAltitude" : 114.0
+    "base": {
+      "id": "B2000000-0000-4000-8000-000000000102",
+      "isVisit": false,
+      "startDate": "2025-06-10T08:20:00Z",
+      "endDate": "2025-06-10T08:28:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "previousItemId": "B1000000-0000-4000-8000-000000000101",
+      "nextItemId": "B3000000-0000-4000-8000-000000000103",
+      "samplesChanged": false,
+      "locked": false,
+      "averageAltitude": 114.0
     },
-    "trip" : {
-      "itemId" : "B2000000-0000-4000-8000-000000000102",
-      "distance" : 1420.5,
-      "speed" : 2.96,
-      "classifiedActivityType" : 5,
-      "confirmedActivityType" : 24,
-      "uncertainActivityType" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "somethingArcAddedLater" : [
+    "trip": {
+      "itemId": "B2000000-0000-4000-8000-000000000102",
+      "distance": 1420.5,
+      "speed": 2.96,
+      "classifiedActivityType": 5,
+      "confirmedActivityType": 24,
+      "uncertainActivityType": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "somethingArcAddedLater": [
         1,
         2,
         3
@@ -66,86 +66,203 @@
     }
   },
   {
-    "base" : {
-      "id" : "B3000000-0000-4000-8000-000000000103",
-      "isVisit" : true,
-      "startDate" : "2025-06-10T08:28:00Z",
-      "endDate" : "2025-06-10T09:00:00Z",
-      "source" : "LocoKit2",
-      "sourceVersion" : "9.0.0",
-      "disabled" : false,
-      "deleted" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "previousItemId" : "B2000000-0000-4000-8000-000000000102",
-      "nextItemId" : "B4000000-0000-4000-8000-000000000104",
-      "samplesChanged" : false,
-      "locked" : false
+    "base": {
+      "id": "B3000000-0000-4000-8000-000000000103",
+      "isVisit": true,
+      "startDate": "2025-06-10T08:28:00Z",
+      "endDate": "2025-06-10T09:00:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "previousItemId": "B2000000-0000-4000-8000-000000000102",
+      "nextItemId": "B4000000-0000-4000-8000-000000000104",
+      "samplesChanged": false,
+      "locked": false
     },
-    "visit" : {
-      "itemId" : "B3000000-0000-4000-8000-000000000103",
-      "latitude" : 51.0499,
-      "longitude" : 13.7333,
-      "radiusMean" : 45.0,
-      "radiusSD" : 11.0,
-      "placeId" : "A2000000-0000-4000-8000-000000000002",
-      "confirmedPlace" : false,
-      "uncertainPlace" : true,
-      "customTitle" : "coffee & cake",
-      "streetAddress" : null,
-      "lastSaved" : "2025-06-10T09:58:00Z"
+    "visit": {
+      "itemId": "B3000000-0000-4000-8000-000000000103",
+      "latitude": 51.0499,
+      "longitude": 13.7333,
+      "radiusMean": 45.0,
+      "radiusSD": 11.0,
+      "placeId": "A2000000-0000-4000-8000-000000000002",
+      "confirmedPlace": false,
+      "uncertainPlace": true,
+      "customTitle": "coffee & cake",
+      "streetAddress": null,
+      "lastSaved": "2025-06-10T09:58:00Z"
     }
   },
   {
-    "base" : {
-      "id" : "B4000000-0000-4000-8000-000000000104",
-      "isVisit" : false,
-      "startDate" : "2025-06-10T09:00:00Z",
-      "endDate" : "2025-06-10T09:10:00Z",
-      "source" : "LocoKit2",
-      "sourceVersion" : "9.0.0",
-      "disabled" : false,
-      "deleted" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "previousItemId" : "B3000000-0000-4000-8000-000000000103",
-      "nextItemId" : "B5000000-0000-4000-8000-000000000105",
-      "samplesChanged" : false,
-      "locked" : false
+    "base": {
+      "id": "B4000000-0000-4000-8000-000000000104",
+      "isVisit": false,
+      "startDate": "2025-06-10T09:00:00Z",
+      "endDate": "2025-06-10T09:10:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "previousItemId": "B3000000-0000-4000-8000-000000000103",
+      "nextItemId": "B5000000-0000-4000-8000-000000000105",
+      "samplesChanged": false,
+      "locked": false
     },
-    "trip" : {
-      "itemId" : "B4000000-0000-4000-8000-000000000104",
-      "distance" : 640.0,
-      "speed" : 1.07,
-      "classifiedActivityType" : null,
-      "confirmedActivityType" : 99,
-      "uncertainActivityType" : true,
-      "lastSaved" : "2025-06-10T09:58:00Z"
+    "trip": {
+      "itemId": "B4000000-0000-4000-8000-000000000104",
+      "distance": 640.0,
+      "speed": 1.07,
+      "classifiedActivityType": null,
+      "confirmedActivityType": 99,
+      "uncertainActivityType": true,
+      "lastSaved": "2025-06-10T09:58:00Z"
     }
   },
   {
-    "base" : {
-      "id" : "B5000000-0000-4000-8000-000000000105",
-      "isVisit" : false,
-      "startDate" : "2025-06-10T09:10:00Z",
-      "endDate" : "2025-06-10T09:20:00Z",
-      "source" : "LocoKit2",
-      "sourceVersion" : "9.0.0",
-      "disabled" : false,
-      "deleted" : false,
-      "lastSaved" : "2025-06-10T09:58:00Z",
-      "previousItemId" : "B4000000-0000-4000-8000-000000000104",
-      "nextItemId" : null,
-      "samplesChanged" : false,
-      "locked" : false,
-      "stepCount" : 610
+    "base": {
+      "id": "B5000000-0000-4000-8000-000000000105",
+      "isVisit": false,
+      "startDate": "2025-06-10T09:10:00Z",
+      "endDate": "2025-06-10T09:20:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-10T09:58:00Z",
+      "previousItemId": "B4000000-0000-4000-8000-000000000104",
+      "nextItemId": null,
+      "samplesChanged": false,
+      "locked": false,
+      "stepCount": 610
     },
-    "trip" : {
-      "itemId" : "B5000000-0000-4000-8000-000000000105",
-      "distance" : 580.0,
-      "speed" : 0.97,
-      "classifiedActivityType" : 2,
-      "confirmedActivityType" : null,
-      "uncertainActivityType" : true,
-      "lastSaved" : "2025-06-10T09:58:00Z"
+    "trip": {
+      "itemId": "B5000000-0000-4000-8000-000000000105",
+      "distance": 580.0,
+      "speed": 0.97,
+      "classifiedActivityType": 2,
+      "confirmedActivityType": null,
+      "uncertainActivityType": true,
+      "lastSaved": "2025-06-10T09:58:00Z"
+    }
+  },
+  {
+    "base": {
+      "id": "B6000000-0000-4000-8000-000000000106",
+      "isVisit": true,
+      "startDate": "2025-06-12T06:00:00Z",
+      "endDate": "2025-06-12T06:30:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-12T10:00:00Z",
+      "previousItemId": null,
+      "nextItemId": "B7000000-0000-4000-8000-000000000107",
+      "samplesChanged": false,
+      "locked": false
+    },
+    "visit": {
+      "itemId": "B6000000-0000-4000-8000-000000000106",
+      "latitude": 51.1328,
+      "longitude": 13.7672,
+      "radiusMean": 80.0,
+      "radiusSD": 20.0,
+      "placeId": null,
+      "confirmedPlace": true,
+      "uncertainPlace": false,
+      "customTitle": "Dresden Airport",
+      "streetAddress": null,
+      "locality": "Dresden",
+      "countryCode": "de",
+      "lastSaved": "2025-06-12T10:00:00Z"
+    }
+  },
+  {
+    "base": {
+      "id": "B7000000-0000-4000-8000-000000000107",
+      "isVisit": false,
+      "startDate": "2025-06-12T06:30:00Z",
+      "endDate": "2025-06-12T07:55:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-12T10:00:00Z",
+      "previousItemId": "B6000000-0000-4000-8000-000000000106",
+      "nextItemId": "B8000000-0000-4000-8000-000000000108",
+      "samplesChanged": false,
+      "locked": false
+    },
+    "trip": {
+      "itemId": "B7000000-0000-4000-8000-000000000107",
+      "distance": 120000.0,
+      "speed": 235.0,
+      "classifiedActivityType": 6,
+      "confirmedActivityType": 6,
+      "uncertainActivityType": false,
+      "lastSaved": "2025-06-12T10:00:00Z"
+    }
+  },
+  {
+    "base": {
+      "id": "B8000000-0000-4000-8000-000000000108",
+      "isVisit": false,
+      "startDate": "2025-06-12T07:55:00Z",
+      "endDate": "2025-06-12T08:05:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-12T10:00:00Z",
+      "previousItemId": "B7000000-0000-4000-8000-000000000107",
+      "nextItemId": "B9000000-0000-4000-8000-000000000109",
+      "samplesChanged": false,
+      "locked": false,
+      "stepCount": 1700
+    },
+    "trip": {
+      "itemId": "B8000000-0000-4000-8000-000000000108",
+      "distance": 1400.0,
+      "speed": 2.3,
+      "classifiedActivityType": 2,
+      "confirmedActivityType": 2,
+      "uncertainActivityType": false,
+      "lastSaved": "2025-06-12T10:00:00Z"
+    }
+  },
+  {
+    "base": {
+      "id": "B9000000-0000-4000-8000-000000000109",
+      "isVisit": true,
+      "startDate": "2025-06-12T08:05:00Z",
+      "endDate": "2025-06-12T09:00:00Z",
+      "source": "LocoKit2",
+      "sourceVersion": "9.0.0",
+      "disabled": false,
+      "deleted": false,
+      "lastSaved": "2025-06-12T10:00:00Z",
+      "previousItemId": "B8000000-0000-4000-8000-000000000108",
+      "nextItemId": null,
+      "samplesChanged": false,
+      "locked": false
+    },
+    "visit": {
+      "itemId": "B9000000-0000-4000-8000-000000000109",
+      "latitude": 50.1008,
+      "longitude": 14.26,
+      "radiusMean": 90.0,
+      "radiusSD": 25.0,
+      "placeId": null,
+      "confirmedPlace": false,
+      "uncertainPlace": true,
+      "customTitle": "Praha Airport",
+      "streetAddress": null,
+      "locality": "Praha",
+      "countryCode": "cz",
+      "lastSaved": "2025-06-12T10:00:00Z"
     }
   }
 ]

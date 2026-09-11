@@ -2,6 +2,8 @@ mod api;
 mod arc;
 mod config;
 mod db;
+mod derive;
+mod geo;
 mod ingest;
 mod status;
 
@@ -24,6 +26,8 @@ enum Command {
     Serve,
     /// Ingest the Arc backup into SQLite.
     Ingest,
+    /// Recompute every item offset and day summary from scratch.
+    Derive,
     /// Show the last ingest run and row counts.
     Status {
         /// Print the raw status struct as JSON.
@@ -40,6 +44,7 @@ async fn main() -> anyhow::Result<()> {
     match cli.command {
         Command::Serve => serve().await,
         Command::Ingest => ingest(),
+        Command::Derive => derive(),
         Command::Status { json } => show_status(json),
     }
 }
@@ -50,7 +55,8 @@ fn ingest() -> anyhow::Result<()> {
     let summary = ingest::run(&mut conn, &config)?;
 
     println!(
-        "run {}: {} of {} files ingested in {:.1}s ({} places, {} items, {} samples upserted)",
+        "run {}: {} of {} files ingested in {:.1}s \
+         ({} places, {} items, {} samples upserted, {} days recomputed)",
         summary.id,
         summary.files_ingested,
         summary.files_seen,
@@ -58,12 +64,28 @@ fn ingest() -> anyhow::Result<()> {
         summary.places_upserted,
         summary.items_upserted,
         summary.samples_upserted,
+        summary.days_recomputed,
     );
     if let Some(error) = &summary.error {
         eprintln!("{error}");
         // Partial ingest is still a failure for whatever called us.
         std::process::exit(1);
     }
+    Ok(())
+}
+
+/// A full rebuild, for when the derivation rules change and the incremental path would leave
+/// older days on the old rules.
+fn derive() -> anyhow::Result<()> {
+    let config = config::Config::from_env()?;
+    let mut conn = db::open(&config.db_path())?;
+    let clock = std::time::Instant::now();
+    let (items, days) = derive::derive_all(&mut conn)?;
+
+    println!(
+        "derived {items} items and {days} day summaries in {:.1}s",
+        clock.elapsed().as_secs_f64()
+    );
     Ok(())
 }
 
@@ -78,8 +100,17 @@ fn show_status(json: bool) -> anyhow::Result<()> {
     }
 
     println!(
-        "places {}, items {}, samples {}, files {}",
-        status.counts.places, status.counts.items, status.counts.samples, status.counts.files
+        "places {}, items {}, samples {}, files {}, days {}",
+        status.counts.places,
+        status.counts.items,
+        status.counts.samples,
+        status.counts.files,
+        status.counts.day_summaries
+    );
+    println!(
+        "days {} .. {}",
+        status.first_summarized_date.as_deref().unwrap_or("-"),
+        status.last_summarized_date.as_deref().unwrap_or("-")
     );
     println!(
         "items {} .. {}",
@@ -98,12 +129,13 @@ fn show_status(json: bool) -> anyhow::Result<()> {
                 run.device_id.as_deref().unwrap_or("-")
             );
             println!(
-                "  {} of {} files, +{} places, +{} items, +{} samples",
+                "  {} of {} files, +{} places, +{} items, +{} samples, {} days recomputed",
                 run.files_ingested,
                 run.files_seen,
                 run.places_upserted,
                 run.items_upserted,
-                run.samples_upserted
+                run.samples_upserted,
+                run.days_recomputed
             );
             if let Some(error) = &run.error {
                 println!("  error: {error}");

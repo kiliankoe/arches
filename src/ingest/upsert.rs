@@ -8,6 +8,7 @@ use jiff::Timestamp;
 use rusqlite::{Transaction, params};
 
 use crate::arc::types::{LocomotionSample, Place, TimelineItem};
+use crate::derive::local_date;
 
 const PLACE_COLUMNS: &[&str] = &[
     "id",
@@ -97,6 +98,7 @@ const SAMPLE_COLUMNS: &[&str] = &[
     "heart_rate",
     "classified_activity_type",
     "confirmed_activity_type",
+    "local_date",
 ];
 
 static PLACE_SQL: LazyLock<String> = LazyLock::new(|| upsert_sql("places", PLACE_COLUMNS));
@@ -239,6 +241,10 @@ pub fn upsert_samples(tx: &Transaction<'_>, samples: &[LocomotionSample]) -> Res
             sample.heart_rate,
             sample.classified_activity_type.map(|kind| kind.raw()),
             sample.confirmed_activity_type.map(|kind| kind.raw()),
+            // Derived here rather than in a later pass so it can never drift from the row.
+            sample
+                .seconds_from_gmt
+                .map(|offset| local_date(sample.date, offset)),
         ])?;
     }
     Ok(changed)

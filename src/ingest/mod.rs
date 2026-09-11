@@ -6,11 +6,13 @@
 mod mirror;
 mod upsert;
 
+use std::collections::BTreeSet;
 use std::sync::{Mutex, PoisonError};
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use anyhow::{Context, Result};
 use jiff::Timestamp;
+use jiff::civil::Date;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::Serialize;
 
@@ -18,6 +20,7 @@ use crate::arc::backup::{Backup, BucketFile, BucketKind};
 use crate::arc::backup::{read_items, read_places, read_samples};
 use crate::config::Config;
 use crate::db::SCHEMA_VERSION;
+use crate::derive;
 
 /// Ingest is not re-entrant: two passes would race on the same bucket files and run counters.
 /// Phase 4's timer takes the same lock as the manual trigger.
@@ -39,6 +42,7 @@ pub struct RunSummary {
     pub places_upserted: i64,
     pub items_upserted: i64,
     pub samples_upserted: i64,
+    pub days_recomputed: i64,
     pub error: Option<String>,
     pub elapsed_ms: i64,
 }
@@ -50,6 +54,7 @@ struct Counters {
     places: i64,
     items: i64,
     samples: i64,
+    days: i64,
 }
 
 struct RunState {
@@ -60,6 +65,10 @@ struct RunState {
     last_backup_date: Option<Timestamp>,
     counters: Counters,
     errors: Vec<String>,
+    /// Every item in a changed month bucket, plus every item a changed sample bucket points at.
+    touched_items: BTreeSet<String>,
+    /// The local days changed sample buckets landed on.
+    touched_dates: BTreeSet<String>,
 }
 
 pub fn run(conn: &mut Connection, config: &Config) -> Result<RunSummary> {
@@ -83,6 +92,8 @@ pub fn run(conn: &mut Connection, config: &Config) -> Result<RunSummary> {
         last_backup_date: None,
         counters: Counters::default(),
         errors: Vec::new(),
+        touched_items: BTreeSet::new(),
+        touched_dates: BTreeSet::new(),
     };
 
     // A fatal error still closes the run row, so `arches status` shows why a pass stopped.
@@ -99,6 +110,7 @@ pub fn run(conn: &mut Connection, config: &Config) -> Result<RunSummary> {
         places = summary.places_upserted,
         items = summary.items_upserted,
         samples = summary.samples_upserted,
+        days = summary.days_recomputed,
         elapsed_ms = summary.elapsed_ms,
         "ingest finished"
     );
@@ -136,7 +148,64 @@ fn ingest_all(conn: &mut Connection, config: &Config, state: &mut RunState) -> R
             }
         }
     }
+
+    // Derivation runs once for the whole pass rather than per file: a trip's item bucket and
+    // its sample buckets are separate files, and only the union of them is a complete picture.
+    derive_touched(conn, state)
+}
+
+fn derive_touched(conn: &mut Connection, state: &mut RunState) -> Result<()> {
+    if state.touched_items.is_empty() && state.touched_dates.is_empty() {
+        return Ok(());
+    }
+    let clock = Instant::now();
+
+    let ids: Vec<String> = state.touched_items.iter().cloned().collect();
+    derive::derive_items(conn, &ids).context("deriving item offsets")?;
+
+    let mut dates = std::mem::take(&mut state.touched_dates);
+    dates.extend(padded_item_dates(conn, &ids)?);
+    let dates: Vec<String> = dates.into_iter().collect();
+    let days = derive::recompute_days(conn, &dates).context("recomputing day summaries")?;
+
+    state.counters.days = days as i64;
+    tracing::info!(
+        items = ids.len(),
+        days_considered = dates.len(),
+        days_recomputed = days,
+        elapsed_ms = clock.elapsed().as_millis() as i64,
+        "derivation finished"
+    );
     Ok(())
+}
+
+/// Every local day the touched items cover, padded by one day on each side: a changed offset
+/// can move an item across a midnight and leave the day it used to be on stale.
+fn padded_item_dates(conn: &Connection, ids: &[String]) -> Result<BTreeSet<String>> {
+    let mut statement = conn.prepare(
+        "SELECT local_start_date, local_end_date FROM items
+         WHERE id = ? AND local_start_date IS NOT NULL AND local_end_date IS NOT NULL",
+    )?;
+    let mut dates = BTreeSet::new();
+    for id in ids {
+        let span = statement
+            .query_row(params![id], |row| {
+                Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            })
+            .optional()?;
+        let Some((from, to)) = span else { continue };
+        let (Ok(from), Ok(to)) = (from.parse::<Date>(), to.parse::<Date>()) else {
+            continue;
+        };
+        let from = from.yesterday().unwrap_or(from);
+        let to = to.tomorrow().unwrap_or(to);
+        dates.extend(
+            derive::dates_in_range(from, to)
+                .into_iter()
+                .map(|date| date.to_string()),
+        );
+    }
+    Ok(dates)
 }
 
 fn ingest_file(
@@ -181,11 +250,26 @@ fn ingest_file(
         BucketKind::Items => {
             let items = read_items(&destination)?;
             state.counters.items += upsert::upsert_items(&tx, &items)? as i64;
+            // Every item in the bucket, not just the ones whose `lastSaved` won: a rewritten
+            // bucket can change a neighbour's offset without changing the item itself.
+            state
+                .touched_items
+                .extend(items.iter().map(|item| item.base.id.clone()));
             items.len()
         }
         BucketKind::Samples => {
             let samples = read_samples(&destination)?;
             state.counters.samples += upsert::upsert_samples(&tx, &samples)? as i64;
+            for sample in &samples {
+                if let Some(item_id) = &sample.timeline_item_id {
+                    state.touched_items.insert(item_id.clone());
+                }
+                if let Some(offset) = sample.seconds_from_gmt {
+                    state
+                        .touched_dates
+                        .insert(derive::local_date(sample.date, offset));
+                }
+            }
             samples.len()
         }
     };
@@ -230,6 +314,7 @@ impl RunState {
             places_upserted: self.counters.places,
             items_upserted: self.counters.items,
             samples_upserted: self.counters.samples,
+            days_recomputed: self.counters.days,
             error,
             elapsed_ms: self.clock.elapsed().as_millis() as i64,
         };
@@ -238,7 +323,7 @@ impl RunState {
             "UPDATE ingest_runs SET
                  finished_at = ?, device_id = ?, last_backup_date = ?, files_seen = ?,
                  files_ingested = ?, places_upserted = ?, items_upserted = ?,
-                 samples_upserted = ?, error = ?
+                 samples_upserted = ?, days_recomputed = ?, error = ?
              WHERE id = ?",
             params![
                 summary.finished_at,
@@ -249,6 +334,7 @@ impl RunState {
                 summary.places_upserted,
                 summary.items_upserted,
                 summary.samples_upserted,
+                summary.days_recomputed,
                 summary.error,
                 summary.id,
             ],
@@ -417,6 +503,67 @@ mod tests {
         assert_eq!(summary.places_upserted, 0);
         assert_eq!(summary.items_upserted, 0);
         assert_eq!(summary.samples_upserted, 0);
+        // Nothing changed, so nothing needs deriving again.
+        assert_eq!(summary.days_recomputed, 0);
+    }
+
+    #[test]
+    fn first_run_derives_local_days() {
+        let mut fixture = Fixture::new();
+
+        let summary = fixture.run();
+
+        // The fixture's items and samples fall on 2025-06-10 and 2025-06-12 local.
+        assert_eq!(summary.days_recomputed, 2);
+        let days: Vec<(String, i64, i64, f64)> = fixture
+            .conn
+            .prepare(
+                "SELECT date, item_count, sample_count, distance_m
+                 FROM day_summaries ORDER BY date",
+            )
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(days.len(), 2);
+        assert_eq!(days[0].0, "2025-06-10");
+        assert_eq!(days[0].1, 4);
+        assert_eq!(days[0].2, 10);
+        // The tram ride from Hauptbahnhof to Postplatz, about 1.15 km along its ten fixes.
+        assert!((days[0].3 - 1150.0).abs() < 25.0, "{:?}", days[0]);
+        assert_eq!(days[1].0, "2025-06-12");
+
+        // 2025-06-11 has neither an item nor a sample and must have no row at all.
+        assert!(days.iter().all(|day| day.0 != "2025-06-11"));
+
+        let (offset, local_start, local_end): (i64, String, String) = fixture
+            .conn
+            .query_row(
+                "SELECT start_offset_seconds, local_start_date, local_end_date
+                 FROM items ORDER BY start_date LIMIT 1",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .unwrap();
+        assert_eq!(offset, 7200);
+        assert_eq!(
+            (local_start.as_str(), local_end.as_str()),
+            ("2025-06-10", "2025-06-10")
+        );
+
+        let unsummarized: i64 = fixture
+            .conn
+            .query_row(
+                "SELECT count(*) FROM samples WHERE seconds_from_gmt IS NOT NULL
+                 AND local_date IS NULL",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(unsummarized, 0);
     }
 
     #[test]

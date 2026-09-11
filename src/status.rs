@@ -12,6 +12,9 @@ pub struct Status {
     pub counts: Counts,
     pub first_item_start: Option<i64>,
     pub last_item_start: Option<i64>,
+    /// Local `YYYY-MM-DD`. The range is not continuous: gap days have no summary at all.
+    pub first_summarized_date: Option<String>,
+    pub last_summarized_date: Option<String>,
     pub last_ingested_at: Option<i64>,
 }
 
@@ -29,6 +32,7 @@ pub struct RunRow {
     pub places_upserted: i64,
     pub items_upserted: i64,
     pub samples_upserted: i64,
+    pub days_recomputed: i64,
     pub error: Option<String>,
 }
 
@@ -39,6 +43,7 @@ pub struct Counts {
     pub items: i64,
     pub samples: i64,
     pub files: i64,
+    pub day_summaries: i64,
 }
 
 pub fn status(conn: &Connection) -> Result<Status> {
@@ -46,7 +51,7 @@ pub fn status(conn: &Connection) -> Result<Status> {
         .query_row(
             "SELECT id, started_at, finished_at, device_id, schema_version, last_backup_date,
                     files_seen, files_ingested, places_upserted, items_upserted,
-                    samples_upserted, error
+                    samples_upserted, days_recomputed, error
              FROM ingest_runs ORDER BY id DESC LIMIT 1",
             [],
             |row| {
@@ -62,7 +67,8 @@ pub fn status(conn: &Connection) -> Result<Status> {
                     places_upserted: row.get(8)?,
                     items_upserted: row.get(9)?,
                     samples_upserted: row.get(10)?,
-                    error: row.get(11)?,
+                    days_recomputed: row.get(11)?,
+                    error: row.get(12)?,
                 })
             },
         )
@@ -80,10 +86,16 @@ pub fn status(conn: &Connection) -> Result<Status> {
         items: count("items")?,
         samples: count("samples")?,
         files: count("ingest_files")?,
+        day_summaries: count("day_summaries")?,
     };
 
     let (first_item_start, last_item_start) = conn.query_row(
         "SELECT min(start_date), max(start_date) FROM items",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let (first_summarized_date, last_summarized_date) = conn.query_row(
+        "SELECT min(date), max(date) FROM day_summaries",
         [],
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
@@ -97,6 +109,8 @@ pub fn status(conn: &Connection) -> Result<Status> {
         counts,
         first_item_start,
         last_item_start,
+        first_summarized_date,
+        last_summarized_date,
         last_ingested_at,
     })
 }
@@ -114,6 +128,8 @@ mod tests {
         assert!(status.last_run.is_none());
         assert_eq!(status.counts.items, 0);
         assert!(status.first_item_start.is_none());
+        assert_eq!(status.counts.day_summaries, 0);
+        assert!(status.first_summarized_date.is_none());
         assert!(status.last_ingested_at.is_none());
     }
 

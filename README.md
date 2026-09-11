@@ -88,6 +88,61 @@ while iCloud fetched them. No file failed to parse. The result is a 746 MiB
 database and a 328 MiB raw mirror, and every later run that finds nothing
 changed costs milliseconds.
 
+## Derived data
+
+Everything the API and UI need per day is precomputed on ingest into
+`day_summaries`, one row per **local** day. A day is never the UTC day: Arc
+records `secondsFromGMT` on every sample and every place, and that offset is
+what decides which day a record belongs to. Samples get a `local_date` on
+insert, so it can never drift from the row.
+
+Items carry no timezone of their own, so each one gets a `start_offset_seconds`
+and an `end_offset_seconds` derived from its first and last sample that has an
+offset. The two are resolved separately because a flight legitimately takes off
+in one offset and lands in another. When an item has no sample with an offset,
+the fallbacks are, in order: the visit's place, the previous item's end offset,
+the next item's start offset, and finally UTC with a warning naming the item.
+`local_start_date` and `local_end_date` follow from the offsets.
+
+An item that runs over local midnight belongs to both days. Its duration is
+clipped into each: the day window runs from local midnight at the item's start
+offset to the next local midnight at its end offset, so the night the clocks
+change is still measured correctly and nothing produces a negative or a
+25-hour item. Visits count under `stationary` in `duration_by_type`, trips
+under their resolved activity type.
+
+Distance is measured from the samples rather than prorated from the item, and
+three rules keep it honest:
+
+- Only between consecutive samples of the same trip item, never across an item
+  boundary and never inside a visit.
+- Never across a gap of more than ten minutes. Arc sleeps when nothing is
+  happening, and bridging a gap would draw a straight line through the night.
+- Never from a fix with a horizontal accuracy worse than 200 m. Those are
+  noise; they are dropped from the chain but still counted as samples and still
+  stretch the day's bounding box.
+
+Deleted and disabled items are excluded everywhere: Arc keeps removed items in
+the export as tombstones, and a disabled item is one the user switched off. A
+day gets a row only if it recorded something: at least one sample, or at least
+one item that starts or ends on it. An item merely spanning a day is not
+enough, because Arc renders a months-long recording gap as a single stretched
+item. The April to July 2025 gap is one four-month "tram" trip with two
+samples on it, and those 122 days have nothing in them to summarize. Nothing
+may assume the summarized range is continuous.
+
+Ingest derives only what a run touched: every item in a changed `items/` month
+bucket, every item a changed `samples/` week bucket points at, and the local
+days those cover padded by a day on each side. When the derivation rules
+themselves change, `arches derive` rebuilds every item and every day from
+scratch.
+
+Derivation is cheap next to the ingest it rides along with. On cassini in
+September 2026, a first run over three years of data derived 13 841 items and
+936 day summaries out of 2.58 M samples in 3.6 s of an 82 s pass, and a full
+`arches derive` took 6.1 s. A run that finds no changed bucket recomputes
+nothing.
+
 ## Development
 
 This project uses a Nix flake and direnv:

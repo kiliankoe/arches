@@ -11,12 +11,13 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 /// The schema version arches writes. Recorded on every ingest run so an old row stays readable.
-pub const SCHEMA_VERSION: i64 = 1;
+pub const SCHEMA_VERSION: i64 = 2;
 
 /// Append-only: never edit a shipped migration, add a new one.
 static MIGRATIONS: LazyLock<Migrations> = LazyLock::new(|| {
-    Migrations::new(vec![M::up(
-        r#"
+    Migrations::new(vec![
+        M::up(
+            r#"
 CREATE TABLE places (
     id                         TEXT PRIMARY KEY,
     name                       TEXT NOT NULL,
@@ -140,7 +141,62 @@ CREATE TABLE ingest_runs (
     error             TEXT
 );
 "#,
-    )])
+        ),
+        M::up(
+            r#"
+-- Derived local-day columns. "Day" always means the local day the record happened in, taken
+-- from the offset Arc recorded with it, never the UTC day: see README.md.
+ALTER TABLE samples ADD COLUMN local_date TEXT;
+-- Leading local_date makes this the day lookup index; the rest lets the day summary walk a
+-- day's samples grouped per item and in time order without a sort.
+CREATE INDEX idx_samples_local_date ON samples(local_date, timeline_item_id, date);
+
+ALTER TABLE items ADD COLUMN start_offset_seconds INTEGER;
+ALTER TABLE items ADD COLUMN end_offset_seconds INTEGER;
+ALTER TABLE items ADD COLUMN local_start_date TEXT;
+ALTER TABLE items ADD COLUMN local_end_date TEXT;
+CREATE INDEX idx_items_local_start_date ON items(local_start_date);
+CREATE INDEX idx_items_local_end_date ON items(local_end_date);
+
+-- One row per local day that has anything in it. Gap days simply have no row; recording
+-- stopped for months in 2025 and nothing may assume continuity.
+CREATE TABLE day_summaries (
+    date                TEXT PRIMARY KEY,
+    -- The offset most of the day's samples used, i.e. where the day was actually spent.
+    utc_offset_seconds  INTEGER,
+    item_count          INTEGER NOT NULL,
+    visit_count         INTEGER NOT NULL,
+    trip_count          INTEGER NOT NULL,
+    sample_count        INTEGER NOT NULL,
+    distance_m          REAL NOT NULL,
+    moving_seconds      INTEGER NOT NULL,
+    -- JSON objects keyed by activity type name, metres and seconds. Visits count as
+    -- "stationary" in duration_by_type and contribute no distance.
+    distance_by_type    TEXT NOT NULL,
+    duration_by_type    TEXT NOT NULL,
+    -- JSON arrays, distinct, place ids in visit order.
+    place_ids           TEXT NOT NULL,
+    country_codes       TEXT NOT NULL,
+    localities          TEXT NOT NULL,
+    min_lat             REAL,
+    min_lon             REAL,
+    max_lat             REAL,
+    max_lon             REAL,
+    first_sample_at     INTEGER,
+    last_sample_at      INTEGER,
+    computed_at         INTEGER NOT NULL
+);
+
+ALTER TABLE ingest_runs ADD COLUMN days_recomputed INTEGER NOT NULL DEFAULT 0;
+
+-- Backfill what plain SQL can do, so an existing database is queryable by local day right
+-- after the migration. Item offsets and day summaries need `arches derive`.
+UPDATE samples
+   SET local_date = strftime('%Y-%m-%d', (date + seconds_from_gmt * 1000) / 1000, 'unixepoch')
+ WHERE seconds_from_gmt IS NOT NULL;
+"#,
+        ),
+    ])
 });
 
 pub fn open(path: &Path) -> Result<Connection> {
@@ -178,6 +234,32 @@ mod tests {
         MIGRATIONS.validate().unwrap();
     }
 
+    /// An existing database has to come out of the migration queryable by local day without
+    /// waiting for `arches derive`.
+    #[test]
+    fn migration_two_backfills_sample_local_dates() {
+        let mut conn = Connection::open_in_memory().unwrap();
+        MIGRATIONS.to_version(&mut conn, 1).unwrap();
+        conn.execute(
+            "INSERT INTO samples (id, date, last_saved, seconds_from_gmt) VALUES
+                 ('a', 1749592800000, 0, 7200),   -- 2025-06-10T22:40:00Z, 00:40 local
+                 ('b', 1749592800000, 0, NULL)",
+            [],
+        )
+        .unwrap();
+
+        MIGRATIONS.to_latest(&mut conn).unwrap();
+
+        let dates: Vec<Option<String>> = conn
+            .prepare("SELECT local_date FROM samples ORDER BY id")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap();
+        assert_eq!(dates, [Some("2025-06-11".to_string()), None]);
+    }
+
     #[test]
     fn open_creates_the_parent_dir() {
         let temp = tempfile::tempdir().unwrap();
@@ -198,7 +280,14 @@ mod tests {
     #[test]
     fn in_memory_has_the_schema() {
         let conn = open_in_memory().unwrap();
-        for table in ["places", "items", "samples", "ingest_files", "ingest_runs"] {
+        for table in [
+            "places",
+            "items",
+            "samples",
+            "ingest_files",
+            "ingest_runs",
+            "day_summaries",
+        ] {
             let count: i64 = conn
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
                     row.get(0)

@@ -16,6 +16,7 @@ mod db;
 mod error;
 mod geojson;
 mod gpx;
+mod heatmap;
 mod items;
 mod model;
 mod places;
@@ -46,6 +47,7 @@ use error::{ApiError, ApiResult};
 #[derive(Clone)]
 pub struct AppState {
     map_style: Arc<str>,
+    map_style_dark: Arc<str>,
     db: Arc<Db>,
     /// The one connection ingest writes through. Readers never touch it, so a pass in flight
     /// cannot block a request: WAL lets them run side by side.
@@ -58,6 +60,7 @@ impl AppState {
     pub fn new(config: Config, ingest_conn: Connection) -> Self {
         Self {
             map_style: Arc::from(config.map_style.as_str()),
+            map_style_dark: Arc::from(config.map_style_dark.as_str()),
             db: Db::new(&config.db_path()),
             ingest_conn: Arc::new(std::sync::Mutex::new(ingest_conn)),
             ingest_config: Arc::new(config),
@@ -135,6 +138,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/places/{id}/visits", get(places::visits))
         .route("/api/near", get(places::near))
         .route("/api/at", get(at::at))
+        .route("/api/heatmap", get(heatmap::get))
         .fallback(assets::serve)
         .layer(cors)
         .layer(CompressionLayer::new())
@@ -142,7 +146,10 @@ pub fn router(state: AppState) -> Router {
 }
 
 async fn config(axum::extract::State(state): axum::extract::State<AppState>) -> Json<Value> {
-    Json(json!({ "mapStyle": state.map_style.as_ref() }))
+    Json(json!({
+        "mapStyle": state.map_style.as_ref(),
+        "mapStyleDark": state.map_style_dark.as_ref(),
+    }))
 }
 
 /// The shared `simplify=<metres>` parameter: absent means the full trace.

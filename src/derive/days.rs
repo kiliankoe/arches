@@ -1,6 +1,7 @@
 //! Day summaries: one row per local day with everything the calendar, week and day views need.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
+use std::time::Instant;
 
 use anyhow::Result;
 use jiff::Timestamp;
@@ -10,7 +11,7 @@ use rusqlite::{Connection, params};
 use super::{clipped_ms, dates_in_range};
 use crate::arc::enums::ActivityType;
 use crate::confirmation::{self, Confirmation};
-use crate::geo::haversine_m;
+use crate::geo::{ROLLUP_SHIFTS, cell_of, haversine_m};
 
 /// Arc sleeps between samples; a longer gap than this is not a straight line someone walked,
 /// so the pair contributes no distance.
@@ -106,6 +107,14 @@ pub fn recompute_days(conn: &mut Connection, dates: &[String]) -> Result<usize> 
              VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
         )?;
         let mut delete = tx.prepare("DELETE FROM day_summaries WHERE date = ?")?;
+        let mut delete_cells = tx.prepare("DELETE FROM heatmap_cells WHERE date = ?")?;
+        let mut delete_rollup = tx.prepare("DELETE FROM heatmap_rollup WHERE date = ?")?;
+        let mut insert_cell =
+            tx.prepare("INSERT INTO heatmap_cells (date, x, y, samples) VALUES (?, ?, ?, ?)")?;
+        let mut insert_rollup = tx.prepare(
+            "INSERT INTO heatmap_rollup (shift, date, x, y, samples) VALUES (?, ?, ?, ?, ?)",
+        )?;
+        let mut cell_nanos = 0;
 
         for date in &wanted {
             let key = date.to_string();
@@ -125,6 +134,13 @@ pub fn recompute_days(conn: &mut Connection, dates: &[String]) -> Result<usize> 
                     })
                 })?
                 .collect::<Result<_, _>>()?;
+
+            // A day that loses its summary loses its cells with it, so the heatmap can never
+            // outlive the day it was counted from.
+            let started = Instant::now();
+            delete_cells.execute(params![key])?;
+            delete_rollup.execute(params![key])?;
+            cell_nanos += started.elapsed().as_nanos();
 
             if !is_a_day(&key, &day_items, &day_samples) {
                 delete.execute(params![key])?;
@@ -162,10 +178,112 @@ pub fn recompute_days(conn: &mut Connection, dates: &[String]) -> Result<usize> 
                 computed_at,
             ])?;
             written += 1;
+
+            let started = Instant::now();
+            let trips: HashSet<&str> = day_items
+                .iter()
+                .filter(|item| !item.is_visit)
+                .map(|item| item.id.as_str())
+                .collect();
+            let cells = cells_of(&day_samples, &trips);
+            for ((x, y), samples) in &cells {
+                insert_cell.execute(params![key, x, y, samples])?;
+            }
+            for shift in ROLLUP_SHIFTS {
+                for ((x, y), samples) in coarsen(&cells, shift) {
+                    insert_rollup.execute(params![shift, key, x, y, samples])?;
+                }
+            }
+            cell_nanos += started.elapsed().as_nanos();
         }
+        tracing::debug!(
+            days = wanted.len(),
+            elapsed_ms = cell_nanos / 1_000_000,
+            "heatmap cells recomputed"
+        );
     }
     tx.commit()?;
     Ok(written)
+}
+
+/// A day's fixes binned onto the heatmap grid, counted per cell, with each trip's track
+/// rasterized into every cell it crosses.
+///
+/// The selection matches the day summary's, minus the inaccurate fixes: a 900 m fix says the
+/// phone was somewhere in a neighbourhood, and smearing it into a 6 m cell would invent a
+/// visit to whichever building the centre happened to land on.
+///
+/// Fixes alone are not enough for a heatmap. At cycling speed they land 20 to 30 m apart on a
+/// 6 m grid, so along a route only every third or fourth cell is hit on a given day and
+/// neighbouring cells end up with wildly different day counts; zoomed in, that renders as a
+/// string of beads no kernel radius can hide. So the cells between two consecutive fixes of the
+/// same trip are filled in too, under the same chain rules the distance uses: never across an
+/// item boundary, never inside a visit, never over a gap Arc slept through.
+fn cells_of(samples: &[Sample], trips: &HashSet<&str>) -> BTreeMap<(i64, i64), i64> {
+    let mut cells = BTreeMap::new();
+    let mut previous: Option<(&str, i64, (i64, i64))> = None;
+    for sample in samples {
+        let (Some(latitude), Some(longitude)) = (sample.latitude, sample.longitude) else {
+            continue;
+        };
+        if sample.horizontal_accuracy.unwrap_or(0.0) > MAX_ACCURACY_M {
+            continue;
+        }
+        let cell = cell_of(latitude, longitude);
+        *cells.entry(cell).or_insert(0) += 1;
+
+        let Some(item_id) = sample.item_id.as_deref() else {
+            previous = None;
+            continue;
+        };
+        if let Some((previous_id, previous_date, from)) = previous
+            && previous_id == item_id
+            && sample.date - previous_date <= MAX_SAMPLE_GAP_MS
+            && trips.contains(item_id)
+        {
+            for between in cells_between(from, cell) {
+                *cells.entry(between).or_insert(0) += 1;
+            }
+        }
+        previous = Some((item_id, sample.date, cell));
+    }
+    cells
+}
+
+/// A flight's fixes can be minutes and many kilometres apart; filling that in would draw a
+/// line across the country that nobody was ever on the ground for.
+const MAX_SEGMENT_CELLS: i64 = 2_000;
+
+/// The cells strictly between two cells on the straight line joining them, one per step along
+/// the longer axis. Empty when they touch or are too far apart to be worth joining.
+fn cells_between((x0, y0): (i64, i64), (x1, y1): (i64, i64)) -> Vec<(i64, i64)> {
+    let (dx, dy) = (x1 - x0, y1 - y0);
+    let steps = dx.abs().max(dy.abs());
+    if steps <= 1 || steps > MAX_SEGMENT_CELLS {
+        return Vec::new();
+    }
+    let mut between = Vec::with_capacity(steps as usize - 1);
+    let mut last = (x0, y0);
+    for i in 1..steps {
+        let cell = (
+            x0 + (dx as f64 * i as f64 / steps as f64).round() as i64,
+            y0 + (dy as f64 * i as f64 / steps as f64).round() as i64,
+        );
+        if cell != last && cell != (x1, y1) {
+            between.push(cell);
+        }
+        last = cell;
+    }
+    between
+}
+
+/// The same counts on a grid `shift` levels coarser, which is what a zoomed-out map asks for.
+fn coarsen(cells: &BTreeMap<(i64, i64), i64>, shift: u32) -> BTreeMap<(i64, i64), i64> {
+    let mut coarse = BTreeMap::new();
+    for (&(x, y), samples) in cells {
+        *coarse.entry((x >> shift, y >> shift)).or_insert(0) += samples;
+    }
+    coarse
 }
 
 struct Summary {
@@ -899,6 +1017,135 @@ mod tests {
         conn.execute("DELETE FROM samples", []).unwrap();
         recompute_days(&mut conn, &["2025-06-10".into()]).unwrap();
         assert!(row(&conn, "2025-06-10").is_none());
+    }
+
+    /// The heatmap's cells are a second output of the same pass, and they live and die with the
+    /// day summary they were counted from.
+    #[test]
+    fn heatmap_cells_are_filled_and_cleared_with_the_day() {
+        let mut conn = db::open_in_memory().unwrap();
+        insert_item(
+            &conn,
+            "walk",
+            false,
+            "2025-06-10T08:00:00Z",
+            "2025-06-10T09:00:00Z",
+        );
+        set_trip(&conn, "walk", ActivityType::Walking.raw());
+        // Two fixes metres apart share a cell, the third is a kilometre away and gets its own.
+        positioned_sample(
+            &conn,
+            "a",
+            "walk",
+            "2025-06-10T08:00:00Z",
+            7200,
+            (51.0403, 13.7320, 10.0),
+        );
+        positioned_sample(
+            &conn,
+            "b",
+            "walk",
+            "2025-06-10T08:01:00Z",
+            7200,
+            (51.04030, 13.73201, 10.0),
+        );
+        positioned_sample(
+            &conn,
+            "c",
+            "walk",
+            "2025-06-10T08:02:00Z",
+            7200,
+            (51.0499, 13.7333, 10.0),
+        );
+        // An inaccurate fix is not a location, so it is not a cell either.
+        positioned_sample(
+            &conn,
+            "d",
+            "walk",
+            "2025-06-10T08:03:00Z",
+            7200,
+            (52.5251, 13.3694, 900.0),
+        );
+        // Nor is a sample with no fix at all.
+        insert_sample(&conn, "e", "walk", "2025-06-10T08:04:00Z", Some(7200));
+
+        derive(&mut conn, &["walk"], &["2025-06-10"]);
+
+        let found = cells(&conn);
+        let count_at = |cell: (i64, i64)| {
+            found
+                .iter()
+                .find(|&&(_, x, y, _)| (x, y) == cell)
+                .map(|&(_, _, _, samples)| samples)
+        };
+        assert_eq!(count_at(cell_of(51.0403, 13.7320)), Some(2));
+        assert_eq!(count_at(cell_of(51.0499, 13.7333)), Some(1));
+        // The kilometre between the second and third fix is rasterized into the cells along it.
+        assert!(found.len() > 100, "{}", found.len());
+        assert!(found.iter().all(|(date, _, _, _)| date == "2025-06-10"));
+
+        conn.execute("DELETE FROM samples", []).unwrap();
+        conn.execute("UPDATE items SET deleted = 1", []).unwrap();
+        recompute_days(&mut conn, &["2025-06-10".into()]).unwrap();
+
+        assert!(row(&conn, "2025-06-10").is_none());
+        assert!(cells(&conn).is_empty());
+    }
+
+    fn cells(conn: &Connection) -> Vec<(String, i64, i64, i64)> {
+        conn.prepare("SELECT date, x, y, samples FROM heatmap_cells ORDER BY date, x, y")
+            .unwrap()
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    }
+
+    /// Two fixes of a trip a few hundred metres apart fill the cells between them, so a route
+    /// is a line on the heatmap and not a string of beads; a visit's fixes never do.
+    #[test]
+    fn trip_segments_are_rasterized_between_fixes() {
+        let from = (100, 200);
+        let to = (110, 204);
+        let between = cells_between(from, to);
+        assert_eq!(between.len(), 9, "{between:?}");
+        assert!(
+            between
+                .iter()
+                .all(|&(x, y)| x > 100 && x < 110 && (200..=204).contains(&y))
+        );
+        assert!(cells_between((5, 5), (6, 5)).is_empty());
+        assert!(cells_between((0, 0), (MAX_SEGMENT_CELLS + 1, 0)).is_empty());
+
+        let fix = |item: &str, minute: i64, lat: f64, lon: f64| Sample {
+            item_id: Some(item.to_string()),
+            date: minute * 60_000,
+            seconds_from_gmt: Some(7200),
+            latitude: Some(lat),
+            longitude: Some(lon),
+            horizontal_accuracy: Some(10.0),
+        };
+        let samples = vec![
+            fix("ride", 0, 51.0403, 13.7320),
+            fix("ride", 1, 51.0403, 13.7340),
+            fix("stay", 2, 51.0499, 13.7333),
+            fix("stay", 3, 51.0499, 13.7353),
+        ];
+        let trips: HashSet<&str> = ["ride"].into_iter().collect();
+        let cells = cells_of(&samples, &trips);
+        let ride_cells = cells
+            .keys()
+            .filter(|&&(_, y)| y == cell_of(51.0403, 13.7320).1)
+            .count();
+        // About 140 m east at 51 N is 20-odd cells of 6 m; the visit's pair stays at two.
+        assert!(ride_cells > 15, "{ride_cells}");
+        let stay_cells = cells
+            .keys()
+            .filter(|&&(_, y)| y == cell_of(51.0499, 13.7333).1)
+            .count();
+        assert_eq!(stay_cells, 2);
     }
 
     #[test]

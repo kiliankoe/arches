@@ -1,8 +1,69 @@
 //! Geometry helpers. Distances are great-circle; Arc's traces are short enough that the
 //! ellipsoid correction is far below GPS noise.
 
+use std::f64::consts::PI;
+
 /// IUGG mean earth radius, the usual choice for haversine.
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
+
+/// The grid heatmap cells are counted on: web-mercator tile coordinates at zoom 22, which is the
+/// pixel grid of zoom 14 tiles and about 6 m per cell at 51 N. Coarser levels are a right shift
+/// of the indices, so one fine table serves every zoom.
+pub const CELL_ZOOM: u32 = 22;
+
+/// The coarser grids `heatmap_rollup` keeps a copy of the counts on, as shifts from
+/// [`CELL_ZOOM`]. Every level from one above the fine grid up to where a level holds barely a
+/// thousand rows, so a query always reads exactly the grid it wants: a request served from a
+/// level below its own scans several times the rows for the same answer. Together they cost
+/// about as many rows again as the fine table. Changing this list needs an `arches derive`.
+pub const ROLLUP_SHIFTS: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14];
+
+/// Where the square web-mercator map is cut off: the projection sends the poles to infinity.
+pub const MAX_MERCATOR_LAT: f64 = 85.051_128_779_806_6;
+
+/// WGS84 equatorial circumference, the one web mercator is scaled to.
+const EQUATOR_M: f64 = 2.0 * PI * 6_378_137.0;
+
+/// The number of cells across the world at `CELL_ZOOM - shift`.
+fn grid(shift: u32) -> f64 {
+    (1u64 << (CELL_ZOOM - shift)) as f64
+}
+
+/// The [`CELL_ZOOM`] cell a coordinate falls in. Latitudes beyond the mercator cut and
+/// longitudes beyond the antimeridian land in the edge cell rather than off the grid.
+pub fn cell_of(latitude: f64, longitude: f64) -> (i64, i64) {
+    let n = grid(0);
+    let latitude = latitude
+        .clamp(-MAX_MERCATOR_LAT, MAX_MERCATOR_LAT)
+        .to_radians();
+    let x = (longitude.clamp(-180.0, 180.0) + 180.0) / 360.0 * n;
+    let y = (1.0 - (latitude.tan() + 1.0 / latitude.cos()).ln() / PI) / 2.0 * n;
+    let last = n as i64 - 1;
+    (
+        (x.floor() as i64).clamp(0, last),
+        (y.floor() as i64).clamp(0, last),
+    )
+}
+
+/// The `(latitude, longitude)` of a point on the grid `shift` levels coarser than [`CELL_ZOOM`],
+/// measured in cells. Whole numbers are cell corners, so `x + 0.5` is a cell centre.
+pub fn cell_position(x: f64, y: f64, shift: u32) -> (f64, f64) {
+    let n = grid(shift);
+    let longitude = x / n * 360.0 - 180.0;
+    let latitude = (PI * (1.0 - 2.0 * y / n)).sinh().atan().to_degrees();
+    (latitude, longitude)
+}
+
+/// The centre of a coarse cell, the point the heatmap plots.
+pub fn cell_centre(x: i64, y: i64, shift: u32) -> (f64, f64) {
+    cell_position(x as f64 + 0.5, y as f64 + 0.5, shift)
+}
+
+/// How wide a coarse cell is on the ground at a latitude. Mercator stretches east-west away
+/// from the equator, so a cell is only square in projected space.
+pub fn cell_metres(shift: u32, latitude: f64) -> f64 {
+    EQUATOR_M * latitude.to_radians().cos() / grid(shift)
+}
 
 /// Great-circle distance in metres between two WGS84 coordinates.
 pub fn haversine_m(lat1: f64, lon1: f64, lat2: f64, lon2: f64) -> f64 {
@@ -151,5 +212,68 @@ mod tests {
         // 0.0045 degrees of latitude is 500 m, so it survives a 400 m tolerance.
         assert_eq!(simplify_indices(&bulge, 400.0), [0, 1, 2]);
         assert_eq!(simplify_indices(&bulge, 600.0), [0, 2]);
+    }
+
+    /// Null island is the middle of the square map, which pins both axes at once.
+    #[test]
+    fn the_grid_is_centred_on_lon_zero_lat_zero() {
+        let middle = 1i64 << (CELL_ZOOM - 1);
+        assert_eq!(cell_of(0.0, 0.0), (middle, middle));
+
+        let (latitude, longitude) = cell_position(middle as f64, middle as f64, 0);
+        assert!(latitude.abs() < 1e-9 && longitude.abs() < 1e-9);
+    }
+
+    #[test]
+    fn cells_round_trip_within_their_own_width() {
+        for (latitude, longitude) in [
+            (51.0499, 13.7333),
+            (-33.8688, 151.2093),
+            (0.0, -179.9),
+            (64.1466, -21.9426),
+        ] {
+            let (x, y) = cell_of(latitude, longitude);
+            let (back_lat, back_lon) = cell_centre(x, y, 0);
+            let width = cell_metres(0, latitude);
+            assert!(
+                haversine_m(latitude, longitude, back_lat, back_lon) < width,
+                "{latitude},{longitude} round tripped to {back_lat},{back_lon}"
+            );
+        }
+    }
+
+    /// The x index doubles per level, so shifting an index right is the same as binning at the
+    /// coarser level, and the coarse cell still contains the point it came from.
+    #[test]
+    fn shifting_coarsens_without_moving_the_point() {
+        let (x, y) = cell_of(51.0499, 13.7333);
+        assert_eq!((x, y), (2_257_156, 1_403_234));
+
+        for shift in [4, 8, 14] {
+            let (coarse_x, coarse_y) = (x >> shift, y >> shift);
+            let (top_lat, left_lon) = cell_position(coarse_x as f64, coarse_y as f64, shift);
+            let (bottom_lat, right_lon) =
+                cell_position(coarse_x as f64 + 1.0, coarse_y as f64 + 1.0, shift);
+            assert!((left_lon..right_lon).contains(&13.7333), "shift {shift}");
+            assert!((bottom_lat..top_lat).contains(&51.0499), "shift {shift}");
+        }
+    }
+
+    /// Near the poles and past the antimeridian, a coordinate has to land in an edge cell
+    /// rather than one step off the grid.
+    #[test]
+    fn coordinates_outside_the_projection_clamp_onto_it() {
+        let last = (1i64 << CELL_ZOOM) - 1;
+        assert_eq!(cell_of(89.9, 180.0), (last, 0));
+        assert_eq!(cell_of(-89.9, -180.0), (0, last));
+        assert_eq!(cell_of(MAX_MERCATOR_LAT, 0.0).1, 0);
+    }
+
+    #[test]
+    fn cell_width_matches_the_mercator_scale() {
+        // 40 075 km round the equator, halved by the cosine at 60 N.
+        assert!((cell_metres(CELL_ZOOM, 0.0) - 40_075_016.7).abs() < 1.0);
+        assert!((cell_metres(0, 51.0) - 6.013).abs() < 0.01);
+        assert!((cell_metres(0, 60.0) / cell_metres(0, 0.0) - 0.5).abs() < 1e-6);
     }
 }

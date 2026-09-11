@@ -63,6 +63,7 @@ export default function MonthView() {
       >
         <Link to={`/month/${monthOf(today())}`}>This month</Link>
         <Link to={`/day/${today()}`}>Today</Link>
+        <Link to="/heat">Heatmap</Link>
       </TopBar>
       <Rail wide>
         {days.error ? (

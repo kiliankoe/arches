@@ -6,17 +6,27 @@
  */
 
 import { createContext, useContext, useEffect } from "react";
-import type { Bbox, DayGeoJson } from "./api";
+import type { Bbox, DayGeoJson, HeatGeoJson } from "./api";
 
-import type { Pin } from "./components/MapView";
+import type { Pin, Viewport } from "./components/MapView";
 
 export type Scene = {
   geojson: DayGeoJson | null;
+  /** The heatmap view's points; every other view leaves the layer empty. */
+  heat?: HeatGeoJson | null;
+  /** Set by a view that refetches as the map moves. */
+  onViewport?: ((view: Viewport) => void) | null;
   pins: Pin[];
   fit: Bbox | null;
 };
 
-export const EMPTY_SCENE: Scene = { geojson: null, pins: [], fit: null };
+export const EMPTY_SCENE: Scene = {
+  geojson: null,
+  heat: null,
+  onViewport: null,
+  pins: [],
+  fit: null,
+};
 
 type SceneContextValue = {
   setScene: (scene: Scene) => void;

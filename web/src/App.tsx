@@ -1,10 +1,11 @@
 import { lazy, Suspense, useMemo, useState } from "react";
-import { Navigate, Route, Routes } from "react-router";
+import { Navigate, Route, Routes, useLocation } from "react-router";
 import { api } from "./api";
 import MapBoundary from "./components/MapBoundary";
 import { useResource } from "./hooks";
 import { today } from "./lib/dates";
 import DayView from "./routes/DayView";
+import HeatView from "./routes/HeatView";
 import MonthView from "./routes/MonthView";
 import PlaceView from "./routes/PlaceView";
 import WeekView from "./routes/WeekView";
@@ -21,6 +22,8 @@ export default function App() {
   const [scene, setScene] = useState<Scene>(EMPTY_SCENE);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const config = useResource("config", () => api.config());
+  // The heatmap ramp is built for a dark basemap; every other view keeps the light one.
+  const dark = useLocation().pathname.startsWith("/heat");
 
   const context = useMemo(() => ({ setScene, selectedId, setSelectedId }), [selectedId]);
 
@@ -31,8 +34,10 @@ export default function App() {
           <MapBoundary>
             <Suspense fallback={<div className="map map-placeholder" />}>
               <MapView
-                styleUrl={config.data.mapStyle}
+                styleUrl={dark ? config.data.mapStyleDark : config.data.mapStyle}
                 geojson={scene.geojson}
+                heat={scene.heat ?? null}
+                onViewport={scene.onViewport ?? null}
                 pins={scene.pins}
                 fit={scene.fit}
                 selectedId={selectedId}
@@ -49,6 +54,7 @@ export default function App() {
           <Route path="/month/:month" element={<MonthView />} />
           <Route path="/week/:week" element={<WeekView />} />
           <Route path="/place/:id" element={<PlaceView />} />
+          <Route path="/heat" element={<HeatView />} />
           <Route path="*" element={<Navigate to={`/day/${today()}`} replace />} />
         </Routes>
       </div>

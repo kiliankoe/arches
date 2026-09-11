@@ -19,6 +19,8 @@ const VISIT_ID: &str = "B1000000-0000-4000-8000-000000000101";
 const TRAM_ID: &str = "B2000000-0000-4000-8000-000000000102";
 const WALK_ID: &str = "B5000000-0000-4000-8000-000000000105";
 const HBF_ID: &str = "A1000000-0000-4000-8000-000000000001";
+/// A viewport around the fixture's corner of Dresden.
+const DRESDEN: &str = "bbox=13.70,51.03,13.76,51.06";
 
 struct Fixture {
     _temp: tempfile::TempDir,
@@ -111,6 +113,7 @@ async fn status_reports_the_run_and_the_counts_with_rfc_3339_dates() {
     assert_eq!(status["counts"]["items"], 5);
     assert_eq!(status["counts"]["places"], 2);
     assert_eq!(status["counts"]["samples"], 17);
+    assert!(status["counts"]["heatmapCells"].as_u64().unwrap() > 15);
     assert_eq!(status["ingestRunning"], false);
     assert_eq!(status["firstSummarizedDate"], DAY);
     assert_eq!(status["lastBackupDate"], "2025-06-10T10:00:00Z");
@@ -572,4 +575,118 @@ async fn the_ui_falls_back_to_a_note_when_it_was_not_built() {
         body.contains("<!doctype html") || body.contains("was not built"),
         "{body}"
     );
+}
+
+/// The fixture is two days a couple of hundred metres apart in Dresden, which is enough to
+/// pin down both what the grid does and what the two weightings mean. Zoomed in, every fix is
+/// its own cell (plus the cells the trips are rasterized through) and only the one coordinate
+/// both days share carries a weight of two; zoomed out to 6 km cells, the whole thing
+/// collapses into a single point.
+#[tokio::test]
+async fn heatmap_aggregates_by_zoom_and_by_weight() {
+    let fixture = Fixture::new();
+
+    let close = fixture.ok(&format!("/api/heatmap?{DRESDEN}&zoom=17")).await;
+    assert_eq!(close["type"], "FeatureCollection");
+    // Every fix is a cell, and the walk's segments are rasterized into the cells between them.
+    let points = close["meta"]["points"].as_u64().unwrap();
+    assert!(points > 14, "{points}");
+    assert_eq!(close["features"].as_array().unwrap().len() as u64, points);
+    // Both days recorded at Postplatz, everywhere else was passed through once.
+    assert_eq!(close["meta"]["maxWeight"], 2);
+    assert_eq!(close["meta"]["days"], 2);
+    assert!(close["meta"]["cellMetres"].as_f64().unwrap() < 7.0);
+
+    let samples = fixture
+        .ok(&format!("/api/heatmap?{DRESDEN}&zoom=17&weight=samples"))
+        .await;
+    assert_eq!(samples["meta"]["points"].as_u64().unwrap(), points);
+    // Two fixes on the 10th and one on the 12th, where counting days said 2.
+    assert_eq!(samples["meta"]["maxWeight"], 3);
+
+    let far = fixture.ok(&format!("/api/heatmap?{DRESDEN}&zoom=6")).await;
+    assert_eq!(far["meta"]["points"], 1);
+    assert_eq!(far["meta"]["maxWeight"], 2);
+    assert!(far["meta"]["cellMetres"].as_f64().unwrap() > 5_000.0);
+
+    let far_samples = fixture
+        .ok(&format!("/api/heatmap?{DRESDEN}&zoom=6&weight=samples"))
+        .await;
+    // Every fix on both days minus the one with no coordinates, plus the cells the trips were
+    // rasterized through: more than the fixes, and the same total the zoomed-in view added up to.
+    let far_weight = far_samples["features"][0]["properties"]["weight"]
+        .as_u64()
+        .unwrap();
+    assert!(far_weight > 16, "{far_weight}");
+    let close_total: u64 = samples["features"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|feature| feature["properties"]["weight"].as_u64().unwrap())
+        .sum();
+    assert_eq!(far_weight, close_total);
+
+    // The point sits at the centre of its cell, and the meta bbox spans that cell's edges.
+    let [longitude, latitude] = [
+        far["features"][0]["geometry"]["coordinates"][0]
+            .as_f64()
+            .unwrap(),
+        far["features"][0]["geometry"]["coordinates"][1]
+            .as_f64()
+            .unwrap(),
+    ];
+    let bbox = far["meta"]["bbox"].as_array().unwrap();
+    assert!(bbox[0].as_f64().unwrap() < longitude && longitude < bbox[2].as_f64().unwrap());
+    assert!(bbox[1].as_f64().unwrap() < latitude && latitude < bbox[3].as_f64().unwrap());
+}
+
+#[tokio::test]
+async fn heatmap_respects_the_date_range_and_the_viewport() {
+    let fixture = Fixture::new();
+
+    let second = fixture
+        .ok(&format!(
+            "/api/heatmap?{DRESDEN}&zoom=6&from=2025-06-12&to=2025-06-12&weight=samples"
+        ))
+        .await;
+    assert_eq!(second["meta"]["days"], 1);
+    assert_eq!(second["features"][0]["properties"]["weight"], 1);
+
+    let none = fixture
+        .ok(&format!(
+            "/api/heatmap?{DRESDEN}&zoom=6&from=2025-06-13&to=2025-06-30"
+        ))
+        .await;
+    assert_eq!(none["meta"]["points"], 0);
+    assert_eq!(none["meta"]["days"], 0);
+    assert_eq!(none["meta"]["bbox"], Value::Null);
+
+    // Berlin, 165 km away: in range on the dates, out of it on the map.
+    let elsewhere = fixture
+        .ok("/api/heatmap?bbox=13.3,52.4,13.5,52.6&zoom=12")
+        .await;
+    assert_eq!(elsewhere["meta"]["points"], 0);
+}
+
+#[tokio::test]
+async fn heatmap_rejects_a_missing_or_broken_viewport() {
+    let fixture = Fixture::new();
+
+    for uri in [
+        "/api/heatmap?zoom=12",
+        &format!("/api/heatmap?{DRESDEN}"),
+        "/api/heatmap?bbox=13.70,51.03,13.76&zoom=12",
+        "/api/heatmap?bbox=13.70,51.03,east,51.06&zoom=12",
+        // Inside out: the maximum corner is south-west of the minimum one.
+        "/api/heatmap?bbox=13.76,51.06,13.70,51.03&zoom=12",
+        &format!("/api/heatmap?{DRESDEN}&zoom=99"),
+        &format!("/api/heatmap?{DRESDEN}&zoom=near"),
+        &format!("/api/heatmap?{DRESDEN}&zoom=12&weight=hours"),
+        &format!("/api/heatmap?{DRESDEN}&zoom=12&from=last-week"),
+        &format!("/api/heatmap?{DRESDEN}&zoom=12&from=2025-06-12&to=2025-06-10"),
+    ] {
+        let (status, body) = fixture.get(uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}: {body}");
+        assert!(body["error"].is_string(), "{uri}: {body}");
+    }
 }

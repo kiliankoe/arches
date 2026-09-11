@@ -4,6 +4,8 @@ use std::time::Duration;
 
 /// OpenFreeMap serves this for free and without a key.
 pub const DEFAULT_MAP_STYLE: &str = "https://tiles.openfreemap.org/styles/liberty";
+/// The heatmap sits on a dark basemap so a magma ramp reads against it.
+pub const DEFAULT_MAP_STYLE_DARK: &str = "https://tiles.openfreemap.org/styles/dark";
 const DEFAULT_ARC_DIR: &str =
     "~/Library/Mobile Documents/iCloud~com~bigpaua~Arc-Timeline-Editor/Documents";
 const DEFAULT_DATA_DIR: &str = "~/Library/Application Support/arches";
@@ -16,6 +18,7 @@ pub struct Config {
     pub data_dir: PathBuf,
     pub bind: String,
     pub map_style: String,
+    pub map_style_dark: String,
     pub ingest_interval: Duration,
 }
 
@@ -55,6 +58,8 @@ impl Config {
             // Loopback only: there is no auth, exposing it is a deliberate deployment choice.
             bind: get("ARCHES_BIND").unwrap_or_else(|| DEFAULT_BIND.to_string()),
             map_style: get("ARCHES_MAP_STYLE").unwrap_or_else(|| DEFAULT_MAP_STYLE.to_string()),
+            map_style_dark: get("ARCHES_MAP_STYLE_DARK")
+                .unwrap_or_else(|| DEFAULT_MAP_STYLE_DARK.to_string()),
             ingest_interval: parse_interval(
                 &get("ARCHES_INGEST_INTERVAL")
                     .unwrap_or_else(|| DEFAULT_INGEST_INTERVAL.to_string()),
@@ -129,12 +134,14 @@ mod tests {
             ("ARCHES_DATA_DIR", "/custom/data"),
             ("ARCHES_BIND", "0.0.0.0:9000"),
             ("ARCHES_MAP_STYLE", "https://example.com/style.json"),
+            ("ARCHES_MAP_STYLE_DARK", "https://example.com/dark.json"),
             ("ARCHES_INGEST_INTERVAL", "30s"),
         ]);
         assert_eq!(config.arc_dir, PathBuf::from("/custom/arc"));
         assert_eq!(config.data_dir, PathBuf::from("/custom/data"));
         assert_eq!(config.bind, "0.0.0.0:9000");
         assert_eq!(config.map_style, "https://example.com/style.json");
+        assert_eq!(config.map_style_dark, "https://example.com/dark.json");
         assert_eq!(config.ingest_interval, Duration::from_secs(30));
     }
 

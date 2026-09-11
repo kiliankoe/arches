@@ -138,10 +138,73 @@ themselves change, `arches derive` rebuilds every item and every day from
 scratch.
 
 Derivation is cheap next to the ingest it rides along with. On cassini in
-September 2026, a first run over three years of data derived 13 841 items and
-936 day summaries out of 2.58 M samples in 3.6 s of an 82 s pass, and a full
-`arches derive` took 6.1 s. A run that finds no changed bucket recomputes
-nothing.
+September 2026, a first run over three years of data derived 13 853 items and
+936 day summaries out of 2.58 M samples in 10.6 s of a 96 s pass, of which
+4.9 s went on the heatmap cells below (about 30 s for a full `arches derive`
+once trips are rasterized into cells). A run that finds no changed bucket
+recomputes nothing.
+
+## Heatmap
+
+Every fix is also counted into `heatmap_cells`, one row per local day per cell
+of the web-mercator grid at zoom 22: the pixel grid of zoom 14 tiles, about 6 m
+across at 51 N. The selection is the day summary's, minus the fixes worse than
+200 m of horizontal accuracy, which would smear a whole neighbourhood into one
+6 m cell. Trips are rasterized as well as sampled: the cells on the straight
+line between two consecutive fixes of the same trip are counted too, under the
+distance rules (never across an item boundary, never inside a visit, never over
+a gap longer than ten minutes, and never for a leg longer than 2000 cells,
+which only a flight produces). Fixes alone land 20 to 30 m apart at cycling
+speed, so on a 6 m grid a route was a string of beads with neighbouring cells
+carrying unrelated day counts, and no kernel radius could smooth that. Cells
+are filled and cleared in the same pass that writes the day
+summary, so a day that loses its row loses its cells with it and `arches
+derive` rebuilds the table along with everything else. An existing database
+migrating to schema 4 comes out with the tables empty; one `arches derive`
+fills them.
+
+Coarser grids are a right shift of the indices, `x >> s, y >> s`, so one fine
+table serves every map zoom. `/api/heatmap` picks `s` from the requested zoom
+so that a cell lands on about four screen pixels, which MapLibre's heatmap
+layer then blurs; a full 1600 x 900 viewport comes out at up to about 30 000
+points at street zoom. Output is capped at 40 000 points, and going over means
+coarsening by another level and asking again rather than truncating: half a
+heatmap is a lie about where someone was.
+
+`weight=days`, the default, counts the distinct days a cell was recorded on.
+`weight=samples` sums the fixes. Days is the default because a night at home is
+thousands of samples in one cell and would wash out every route ever taken.
+`meta` carries `cellMetres`, `maxWeight`, `points`, `days` (how many days in
+the range put anything into the view) and `bbox` (the matched cells' extent,
+for framing the range on first load).
+
+Grouping the fine table turned out to cost about a third of a second for the
+all-time views: millions of rows once trips are rasterized, and a bounding box
+only seeks on `x`. So `heatmap_rollup` keeps the same per-day counts
+pre-shifted to every level from 1 to 14, and a query reads the level it
+actually wants. Both tables are keyed date first, so recomputing one day
+deletes a contiguous range rather than scanning every other day. The spatial
+indexes carry `samples` so a query is answered from the index alone; without
+that, every row cost a lookup back into the table and a street-level viewport
+took ten times as long. Rows are aggregated in Rust in one pass rather than
+with `GROUP BY` and `count(DISTINCT date)`, which cost SQLite a temp b-tree
+per group and a second scan for the day total.
+
+Warm timings on cassini in September 2026, over 936 days and 2.58 M samples,
+for a 1600 x 900 viewport over Dresden, all time unless noted:
+
+| Zoom | | |
+| --- | --- | --- |
+| 3 | 2 ms | 189 points |
+| 6 | 4 ms | 945 points |
+| 12 | 61 ms | 10 023 points |
+| 13 | 216 ms | 17 914 points |
+| 15 | 150 ms | 27 473 points |
+| 15, last 30 days | 51 ms | 5 887 points |
+| 17 | 69 ms | 7 118 points |
+
+About a third of the street-level time is gzip on the 3.4 MB of GeoJSON, which
+goes over the wire as 165 KB.
 
 ## Confirmation
 
@@ -182,6 +245,7 @@ with no auth and pensieve's browser frontend fetches from it directly.
 | `GET /api/places/{id}/visits?from=&to=&limit=` | Visits there, newest first. |
 | `GET /api/near?lat=&lon=&radius=` | Places within a radius in metres (default 250, max 5000), nearest first, each with `distanceM`. |
 | `GET /api/at?ts=` | The item covering an instant, preferring the visit; `{ "item": null }` when nothing does, not a 404. |
+| `GET /api/heatmap?bbox=&zoom=&from=&to=&weight=` | Everywhere you have been in a range, binned for the viewport: a FeatureCollection of cell-centre Points with a `weight`, plus a `meta` member. `bbox` and `zoom` are required. See *Heatmap* above. |
 
 `simplify=<metres>` runs Ramer-Douglas-Peucker over the coordinate chain with
 that tolerance, measured on a local equirectangular projection so the number is
@@ -214,6 +278,7 @@ becomes a bottom sheet.
 | `/month/{yyyy-mm}` | A calendar of the month, each day a distance bar segmented by activity type. |
 | `/week/{yyyy-Www}` | Seven 24 hour strips, one per ISO-week day, items drawn as blocks by clipped time. |
 | `/place/{id}` | One place, its address and counts, and its visits newest first. |
+| `/heat?from=&to=&weight=` | The heatmap over a range of days, with presets, two date inputs and a days/samples toggle. Both travel in the URL. |
 
 Every route deep-links; unknown paths fall back to the shell, so the browser's
 address bar is a usable input. In the day view the left and right arrow keys
@@ -230,6 +295,23 @@ disagree:
 | --- | --- | --- | --- | --- | --- | --- | --- | --- |
 | walking | running | cycling | car | bus | train | tram | airplane | other |
 | `#3c7a1e` | `#a92e72` | `#0e7b72` | `#be3a2e` | `#b0690c` | `#2b4ca8` | `#7040a6` | `#1b6c93` | `#7a7420` |
+
+The heatmap is the one thing that does not take a colour from that table. It
+renders on the dark basemap from `ARCHES_MAP_STYLE_DARK` with a magma ramp,
+transparent through dark purple, magenta, red and orange to yellow, so heat
+climbs in luminance as well as hue against the dark ground. The kernel radius
+follows the cell size each response reports, 3.5 times the cells' spacing on
+screen, and doubles per zoom level until the next fetch so the cells never
+drift apart from their kernels. MapLibre's kernel is a Gaussian with sigma at a
+third of the radius, and its shader also shrinks a faint point's quad by its
+weight, so anything much tighter than that, or a weight near zero, shows the
+grid through the blur; weights therefore have a floor of 0.15. The weight
+goes through a logarithm before it is normalised against the response's own
+maximum. Counting days over three years, the cell holding a desk is 900 and a
+street walked once is 1; linearly that street is a thousandth of full heat and
+invisible, and a square root only gets it to a thirtieth. The logarithm puts it
+at a tenth, which is the difference between a map of routes and a map of one
+bright dot.
 
 Visits are ink (`#1b2230`), not a hue. Confirmation state never takes a colour
 of its own: an item Arc has not had confirmed is drawn dashed, on the map, in
@@ -303,5 +385,6 @@ All configuration is via environment variables:
 | `ARCHES_DATA_DIR`         | `~/Library/Application Support/arches`                                                | Where arches writes its database and raw mirror. |
 | `ARCHES_BIND`             | `127.0.0.1:8471`                                                                       | Address the HTTP API binds to.             |
 | `ARCHES_MAP_STYLE`        | `https://tiles.openfreemap.org/styles/liberty`                                        | MapLibre style URL served to the frontend. |
+| `ARCHES_MAP_STYLE_DARK`   | `https://tiles.openfreemap.org/styles/dark`                                           | Dark style the heatmap view renders on. |
 | `ARCHES_INGEST_INTERVAL`  | `15m`                                                                                  | How often ingest polls Arc's buckets (`s`/`m`/`h` suffix). |
 | `RUST_LOG`                | `info`                                                                                 | Log filter (tracing `EnvFilter` syntax). |

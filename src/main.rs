@@ -41,6 +41,9 @@ enum Command {
 async fn main() -> anyhow::Result<()> {
     // Info by default: a launchd service with no RUST_LOG set should still say what it did.
     tracing_subscriber::fmt()
+        // Logs go to stderr so `status --json` on stdout stays parseable even when opening the
+        // database logs something, such as a migration.
+        .with_writer(std::io::stderr)
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
                 .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),

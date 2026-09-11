@@ -12,6 +12,7 @@ export type Counts = {
   samples: number;
   files: number;
   daySummaries: number;
+  heatmapCells: number;
 };
 
 export type IngestRun = {
@@ -42,7 +43,7 @@ export type Status = {
   ingestRunning: boolean;
 };
 
-export type Config = { mapStyle: string };
+export type Config = { mapStyle: string; mapStyleDark: string };
 
 export type Health = {
   stepCount: number | null;
@@ -141,6 +142,38 @@ export type DayFeature = {
 
 export type DayGeoJson = { type: "FeatureCollection"; features: DayFeature[] };
 
+export type HeatFeature = {
+  type: "Feature";
+  geometry: { type: "Point"; coordinates: [number, number] };
+  properties: { weight: number };
+};
+
+/**
+ * A GeoJSON foreign member: everything the client needs to draw and describe the answer that is
+ * not itself a point. `bbox` is the extent of the matched cells, null when nothing matched.
+ */
+export type HeatMeta = {
+  cellMetres: number;
+  maxWeight: number;
+  points: number;
+  days: number;
+  bbox: Bbox | null;
+};
+
+export type HeatGeoJson = {
+  type: "FeatureCollection";
+  features: HeatFeature[];
+  meta: HeatMeta;
+};
+
+export type HeatQuery = {
+  bbox: Bbox;
+  zoom: number;
+  from?: string | null;
+  to?: string | null;
+  weight?: "days" | "samples";
+};
+
 /** A 404 is routine here: a day with no recording simply has no row. */
 export class ApiError extends Error {
   readonly status: number;
@@ -160,8 +193,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   let response: Response;
   try {
     response = await fetch(`/api${path}`, init);
-  } catch {
-    // A failed fetch means the server, not the request: say so rather than leaking "Failed to fetch".
+  } catch (failure) {
+    // A cancelled request is the caller's own doing and has to stay distinguishable from a
+    // server that is not there; everything else means the server, not the request.
+    if (init?.signal?.aborted) throw failure;
     throw new ApiError(0, "Server not reachable at /api. Is arches running?");
   }
   if (!response.ok) {
@@ -194,6 +229,19 @@ export const api = {
   place: (id: string) => request<Place>(`/places/${encodeURIComponent(id)}`),
   placeVisits: (id: string, limit?: number) =>
     request<Item[]>(`/places/${encodeURIComponent(id)}/visits${query({ limit })}`),
+  heatmap: ({ bbox, zoom, from, to, weight }: HeatQuery, signal?: AbortSignal) =>
+    request<HeatGeoJson>(
+      `/heatmap${query({
+        bbox: bbox.map((value) => value.toFixed(5)).join(","),
+        // Whole zooms only: the server bins to one anyway, and it keeps the URL stable while
+        // a pinch gesture settles.
+        zoom: Math.round(zoom),
+        from: from ?? undefined,
+        to: to ?? undefined,
+        weight,
+      })}`,
+      { signal },
+    ),
 };
 
 export function errorMessage(error: unknown): string {

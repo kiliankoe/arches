@@ -11,7 +11,7 @@ use rusqlite::Connection;
 use rusqlite_migration::{M, Migrations};
 
 /// The schema version arches writes. Recorded on every ingest run so an old row stays readable.
-pub const SCHEMA_VERSION: i64 = 3;
+pub const SCHEMA_VERSION: i64 = 5;
 
 /// Append-only: never edit a shipped migration, add a new one.
 static MIGRATIONS: LazyLock<Migrations> = LazyLock::new(|| {
@@ -205,6 +205,56 @@ ALTER TABLE day_summaries ADD COLUMN unconfirmed_items INTEGER NOT NULL DEFAULT 
 ALTER TABLE day_summaries ADD COLUMN confirmed INTEGER NOT NULL DEFAULT 0;
 "#,
         ),
+        M::up(
+            r#"
+-- One row per local day per cell of the web-mercator grid at zoom 22, about 6 m across at 51 N.
+-- Coarser levels are `x >> s, y >> s`, so one fine table answers every map zoom. Keyed by day so
+-- the heatmap can count distinct days rather than samples: a night at home is thousands of
+-- samples in one cell and would otherwise wash out every route.
+CREATE TABLE heatmap_cells (
+    date     TEXT NOT NULL,
+    x        INTEGER NOT NULL,
+    y        INTEGER NOT NULL,
+    samples  INTEGER NOT NULL,
+    PRIMARY KEY (date, x, y)
+) WITHOUT ROWID;
+-- The query is a bounding box, so x leads. On a WITHOUT ROWID table the index carries the
+-- primary key with it, which makes this cover the date filter and the distinct-day count too.
+CREATE INDEX idx_heatmap_cells_xy ON heatmap_cells(x, y);
+
+-- The same counts pre-shifted to a handful of coarser grids. Zoomed out, the fine table is
+-- hundreds of thousands of rows for a few thousand points, and grouping them costs a third of
+-- a second; see README.md for the measurements. Still keyed by day, so a recomputed day
+-- rewrites only its own rows and `count(DISTINCT date)` still means days.
+CREATE TABLE heatmap_rollup (
+    date     TEXT NOT NULL,
+    shift    INTEGER NOT NULL,
+    x        INTEGER NOT NULL,
+    y        INTEGER NOT NULL,
+    samples  INTEGER NOT NULL,
+    -- Date first so recomputing one day deletes a contiguous range instead of scanning every
+    -- level of every other day: with the level leading, a full derive takes minutes longer.
+    PRIMARY KEY (date, shift, x, y)
+) WITHOUT ROWID;
+CREATE INDEX idx_heatmap_rollup_xy ON heatmap_rollup(shift, x, y);
+"#,
+        ),
+        // Migration 5: the spatial indexes carry `samples` so a heatmap query is answered from
+        // the index alone. Without it every row in a viewport cost a lookup back into the
+        // table by primary key, and a street-level view of 200 000 rows took ten times the scan.
+        M::up(
+            r#"
+DROP INDEX idx_heatmap_cells_xy;
+CREATE INDEX idx_heatmap_cells_xy ON heatmap_cells(x, y, samples);
+DROP INDEX idx_heatmap_rollup_xy;
+CREATE INDEX idx_heatmap_rollup_xy ON heatmap_rollup(shift, x, y, samples);
+-- Rollup level 1 is new in this version; fill it from the fine cells the way derive would, so
+-- an upgraded database answers street-level queries without waiting for an `arches derive`.
+DELETE FROM heatmap_rollup WHERE shift = 1;
+INSERT INTO heatmap_rollup (date, shift, x, y, samples)
+SELECT date, 1, x >> 1, y >> 1, sum(samples) FROM heatmap_cells GROUP BY date, x >> 1, y >> 1;
+"#,
+        ),
     ])
 });
 
@@ -296,6 +346,7 @@ mod tests {
             "ingest_files",
             "ingest_runs",
             "day_summaries",
+            "heatmap_cells",
         ] {
             let count: i64 = conn
                 .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {

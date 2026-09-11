@@ -292,3 +292,69 @@ a.item-title:hover {
     padding: 4px 5px 5px;
   }
 }
+
+/*
+ * Heatmap rail. Nothing but the controls: the map is the view, so the panel stays a short stack
+ * of chips, two dates, the count and the legend.
+ */
+
+.heat-rail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 14px 16px;
+}
+
+.heat-presets {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.chip {
+  font-size: var(--size-1);
+  color: var(--ink-2);
+  background: #fff;
+  border: 1px solid var(--line);
+  border-radius: 3px;
+  padding: 4px 9px;
+}
+
+.chip:hover {
+  background: var(--hover);
+}
+
+.chip-on {
+  color: var(--ink);
+  background: var(--hover);
+  border-color: var(--line-strong);
+}
+
+.heat-dates {
+  display: flex;
+  gap: 10px;
+}
+
+.heat-dates label {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.heat-legend {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+/* Over a light check so the transparent end of the ramp reads as transparent, not as white. */
+.heat-swatch {
+  height: 10px;
+  border-radius: 2px;
+  border: 1px solid var(--line);
+}
+
+.heat-legend-ends {
+  display: flex;
+  justify-content: space-between;
+}

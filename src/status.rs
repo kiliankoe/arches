@@ -44,6 +44,7 @@ pub struct Counts {
     pub samples: i64,
     pub files: i64,
     pub day_summaries: i64,
+    pub heatmap_cells: i64,
 }
 
 pub fn status(conn: &Connection) -> Result<Status> {
@@ -87,6 +88,7 @@ pub fn status(conn: &Connection) -> Result<Status> {
         samples: count("samples")?,
         files: count("ingest_files")?,
         day_summaries: count("day_summaries")?,
+        heatmap_cells: count("heatmap_cells")?,
     };
 
     let (first_item_start, last_item_start) = conn.query_row(

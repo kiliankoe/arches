@@ -1,547 +1,174 @@
 # arches
 
 arches is a bridge between the data the Arc Timeline Recorder app backs up
-into iCloud and other tools on the tailnet, first of all pensieve. It
-ingests the Arc backup into SQLite, serves it over a JSON/GeoJSON API and
-ships a small React UI for browsing days, weeks, months and heatmaps.
+into iCloud and other tools on the tailnet, first of all pensieve. It ingests
+the backup, and optionally a directory of older GPX history, into SQLite,
+serves it over a JSON/GeoJSON API and ships a small React UI for browsing
+days, weeks, months, a heatmap and highlights.
 
-Arc's iCloud folder (`Documents/Backup/<device-uuid>/`, the LocoKit2
-bucketed export format) is the source of truth and is **read-only** for
-arches, without exception: files are opened read-only, nothing is ever
-created, renamed, touched or deleted in there, and no temp files land next
-to the data. The same goes for `ARCHES_GPX_DIR`, the optional second source
-below. Everything arches writes goes to `ARCHES_DATA_DIR`, including a
-mirror of the raw files. Tests use a temp dir, never the real folder.
-An accidental write could corrupt Arc's backup chain or trigger a restore.
+Arc's iCloud folder and the GPX directory are **read-only** for arches,
+without exception. Files are opened to read, nothing is created, renamed or
+deleted in there, and no temp files land next to the data. Everything arches
+writes goes to `ARCHES_DATA_DIR`. An accidental write could corrupt Arc's
+backup chain or trigger a restore.
 
-## Arc data format
+## Getting started
 
-Arc backs up to `<ARCHES_ARC_DIR>/Backup/<device-uuid>/`, one directory per
-device. When there is more than one, arches uses the device whose backup
-session finished most recently and logs the rest.
+The project uses a Nix flake and direnv:
 
 ```
-Backup/<device-uuid>/
-  metadata.json          schema version, session dates, record counts
-  places/{0-9A-F}.json   places bucketed by the first character of their UUID
-  items/YYYY-MM.json     timeline items by month
-  samples/YYYY-Www.json.gz  location samples by ISO week, usually gzipped
-  notes/                 app extension data, unused here
-```
-
-Places and samples files hold plain arrays; item files hold wrapper objects
-`{ "base": ..., "visit": ... }` or `{ "base": ..., "trip": ... }`. Both
-`.json` and `.json.gz` are accepted everywhere. Null fields are omitted
-rather than emitted, and Arc adds fields between schema versions, so
-`src/arc/types.rs` treats almost everything as optional and never rejects
-unknown fields. Evicted files show up as `.<name>.icloud` placeholders;
-those are skipped and logged.
-
-The format is LocoKit2's bucketed export, specified in
-[docs/export/FORMAT.md](https://github.com/sobri909/LocoKit2/blob/main/docs/export/FORMAT.md).
-Activity, moving and recording states are the integer enums from that repo;
-arches keeps their raw values and renders them by name.
-
-## Ingest
-
-`arches ingest` runs one pass over the backup and `arches status` (or
-`arches status --json`) reports what it left behind:
-
-```
-arches ingest
-arches status
-```
-
-A pass discovers the newest device backup, lists the places, items and sample
-buckets and compares each file's mtime and size against the `ingest_files`
-table. Unchanged files are skipped. A changed file is first copied into
-`<ARCHES_DATA_DIR>/raw/<device-uuid>/<bucket path>` by writing a temp file
-next to the destination and renaming it, so the mirror is never partial, then
-parsed from the mirrored copy. Parsing the copy rather than the original means
-an iCloud-evicted file is downloaded exactly once per change, and the mirror
-doubles as an off-iCloud backup of the raw buckets. A copy that takes longer
-than three seconds is logged with its elapsed time, since a first run is
-mostly spent waiting for iCloud.
-
-Records are upserted in one transaction per file, guarded on `lastSaved`, so
-an older rendering of a record never overwrites a newer one and re-ingesting
-a file is free. Nothing is ever deleted; Arc marks removals with `deleted`.
-The `ingest_files` row is written in the same transaction as the records, so
-a crash re-ingests the file instead of losing it. A file that fails to parse
-is logged, recorded in the run's `error` column and left un-ingested; the
-other files still go in, and `arches ingest` exits non-zero. The same holds
-between sources: a pass ingests Arc and then the GPX history below, and a
-folder that is missing or unreadable costs its own source and nothing else.
-Derivation runs once at the end, over whatever both of them touched.
-
-Timestamps are stored as unix milliseconds and booleans as 0/1, so every
-column is a plain integer.
-
-Observed on cassini in September 2026, over three years of recording (183
-bucket files: 16 place buckets, 32 item months, 135 sample weeks):
-
-| | first run | second run |
-| --- | --- | --- |
-| wall time | 353.5 s | 0.02 s |
-| files ingested | 183 | 0 |
-| records upserted | 1134 places, 13 831 items, 2 576 927 samples | none |
-
-That first run was almost entirely iCloud: 17 s of user and 24 s of system
-time against six minutes of wall clock, with 43 buckets logged as slow copies
-while iCloud fetched them. No file failed to parse. The result is a 746 MiB
-database and a 328 MiB raw mirror, and every later run that finds nothing
-changed costs milliseconds.
-
-## GPX history
-
-Arc is not the only recording there has ever been. `ARCHES_GPX_DIR` points at a
-directory of daily GPX files, and they land in the same tables as the backup, so
-the day views, the heatmap and the highlights treat both as one timeline and
-never learn there are two sources beyond the `source` column. The directory is
-**read-only** the same way Arc's folder is: files are opened to read, copied
-into `<ARCHES_DATA_DIR>/raw/gpx/<file name>`, and parsed from that copy. With
-the variable unset nothing GPX-related runs at all.
-
-The shape accepted is the one Arc's own daily exports have, which is what the
-quantified-map-gpx script writes when it renders thirteen years of Quantified
-Map history: one file per UTC day named `YYYY-MM-DD.gpx`, holding `<trk>` and
-`<wpt>` elements interleaved in chronological order, all times UTC. Parsing is
-streaming (quick-xml, no document tree), and unknown elements and attributes are
-ignored rather than rejected: the files are an archive nobody is going to
-regenerate to suit us.
-
-| GPX | arches |
-| --- | --- |
-| the `creator` attribute | the `source` of every row the directory produces (`quantified-map-gpx`; Arc's own is `LocoKit2`) |
-| `<trk>` | a trip item, its fixes summed with haversine into `trip_distance` and divided by the duration into `trip_speed` |
-| `<type>` | the activity type, confirmed: a type Arc has a case for is what the timeline recorded, not a guess made now |
-| `<type>transport` | classified as `car`, unconfirmed and uncertain. Quantified Map's word for "motorised, and that is all I know" |
-| `<type>unknown`, or a word Arc has no case for | classified `unknown`, unconfirmed and uncertain |
-| `<trkpt>` | a sample, moving and recording, with `<ele>` as its altitude |
-| `<wpt>` | a visit item, plus one sample at the waypoint so the item has an offset and a position |
-| `<wpt><name>` | a place, keyed on the name. `Unnamed Visit` gets none and stays unconfirmed |
-
-A track with fewer than two timed fixes is dropped rather than written as a
-one-point trip; it is a sliver at a segment boundary or a midnight split.
-
-GPX carries no ids and ingest has to be an upsert, so an id is a hash of
-`(source, kind, key)` rendered as a version 8 UUID, the same shape Arc's own
-records have. Trips and their fixes are keyed on the file name and the element
-index, visits on their name and start time, places on the name alone. The hash
-is FNV-1a rather than `std::hash`, whose `DefaultHasher` is explicitly not
-stable across Rust releases: an id that changed with the compiler would fork the
-whole archive. Re-exporting the directory therefore upserts in place, and a file
-whose mtime and size have not moved is skipped like an Arc bucket.
-
-Visits are where the UTC day boundary shows. A `<wpt>` carries the start of a
-visit and nothing else, so it ends when the next element in the stream starts,
-which for the last waypoint of a file means peeking into the files after it. A
-visit spanning midnight is written to both files with the same name and start
-time, and since the id is that pair, both copies are one item; the second copy's
-end, which knows what followed, wins. The end is capped at 24 hours: where the
-export has a gap the next element can be months later (458 of the 2087 visits at
-the end of a file, the longest by 418 days), and a recording stopping is not the
-same as a visit going on. The last visit of the whole directory, with nothing
-after it at all, gets an hour.
-
-Arc wins where the two sources meet. Any GPX file whose day is on or after the
-first day a non-GPX item starts is skipped with a warning naming it and is not
-recorded in `ingest_files`, so re-exporting a history that now overlaps the
-backup can never bury the better recording. Arc has real ids, accuracies and
-confirmed places; the import has none of that. The day is compared in UTC, which
-errs towards skipping a file whose evening already belongs to Arc.
-
-GPX timestamps are all UTC, but every day in this database is a local day. The
-coordinate gives an IANA zone (tzf-rs, boundary data bundled into the binary, no
-network) and the zone gives the offset at that instant (jiff, system tzdb), which
-is what makes a summer day in Dresden come out at +2 and the winter either side
-of it at +1. Lookups are cached per coordinate rounded to two decimals, about a
-kilometre, since a day's fixes are almost all in one zone.
-
-Places are rewritten at the end of the pass from every visit in the database
-rather than from the ones the run happened to touch, so re-ingesting one changed
-file cannot leave the other counts stale. The position is the mean of the
-waypoints that carried the name, `visitDays` counts distinct local days, and the
-offset is the zone at that mean position on the last visit: one static offset per
-place, which is the approximation Arc's own places carry too.
-
-What GPX does not have: accuracies, speed, course, step counts and heart rates,
-street addresses, localities, country codes and place radii. Those columns stay
-NULL rather than being invented from the geometry. That is also why the imported
-years produce no "first time in a country" or "first time in a town" highlights:
-those are derived from a day summary's country codes and localities, and the
-export carries neither. Flights and longest trips do work, since they come from
-the trips themselves.
-
-Observed on cassini in September 2026, over 2380 files and 266 MB of
-quantified-map export covering 2010-08-08 to 2023-10-07, into an empty data dir:
-
-| | first run | second run |
-| --- | --- | --- |
-| wall time | 69.7 s (42 s over the files, 28 s derivation) | 0.04 s |
-| files ingested | 2380 | 0 |
-| records upserted | 1466 places, 28 504 items, 1 773 433 samples | none |
-| days recomputed | 2465 | 0 |
-
-Those upserts land on 27 366 items: the difference is the visits that span UTC
-midnight and are written from both of the files that hold them. Parsing is
-streaming and the database work is one transaction per file, so the process
-peaks at 235 MB whatever the size of the archive, of which about 30 MB is the
-timezone boundary index. The result is a 1.4 GiB database, most of it heatmap
-cells, next to the 266 MB mirror of the files themselves.
-
-## Derived data
-
-Everything the API and UI need per day is precomputed on ingest into
-`day_summaries`, one row per **local** day. A day is never the UTC day: Arc
-records `secondsFromGMT` on every sample and every place, and that offset is
-what decides which day a record belongs to. Samples get a `local_date` on
-insert, so it can never drift from the row.
-
-Items carry no timezone of their own, so each one gets a `start_offset_seconds`
-and an `end_offset_seconds` derived from its first and last sample that has an
-offset. The two are resolved separately because a flight legitimately takes off
-in one offset and lands in another. When an item has no sample with an offset,
-the fallbacks are, in order: the visit's place, the previous item's end offset,
-the next item's start offset, and finally UTC with a warning naming the item.
-`local_start_date` and `local_end_date` follow from the offsets.
-
-An item that runs over local midnight belongs to both days. Its duration is
-clipped into each: the day window runs from local midnight at the item's start
-offset to the next local midnight at its end offset, so the night the clocks
-change is still measured correctly and nothing produces a negative or a
-25-hour item. Visits count under `stationary` in `duration_by_type`, trips
-under their resolved activity type.
-
-Distance is measured from the samples rather than prorated from the item, and
-three rules keep it honest:
-
-- Only between consecutive samples of the same trip item, never across an item
-  boundary and never inside a visit.
-- Never across a gap of more than ten minutes. Arc sleeps when nothing is
-  happening, and bridging a gap would draw a straight line through the night.
-- Never from a fix with a horizontal accuracy worse than 200 m. Those are
-  noise; they are dropped from the chain but still counted as samples and still
-  stretch the day's bounding box.
-
-Deleted and disabled items are excluded everywhere: Arc keeps removed items in
-the export as tombstones, and a disabled item is one the user switched off. A
-day gets a row only if it recorded something: at least one sample, or at least
-one item that starts or ends on it. An item merely spanning a day is not
-enough, because Arc renders a months-long recording gap as a single stretched
-item. The April to July 2025 gap is one four-month "tram" trip with two
-samples on it, and those 122 days have nothing in them to summarize. Nothing
-may assume the summarized range is continuous.
-
-Ingest derives only what a run touched: every item in a changed `items/` month
-bucket, every item a changed `samples/` week bucket points at, and the local
-days those cover padded by a day on each side. When the derivation rules
-themselves change, `arches derive` rebuilds every item and every day from
-scratch.
-
-Derivation is cheap next to the ingest it rides along with. On cassini in
-September 2026, a first run over three years of data derived 13 853 items and
-936 day summaries out of 2.58 M samples in 10.6 s of a 96 s pass, of which
-4.9 s went on the heatmap cells below (about 30 s for a full `arches derive`
-once trips are rasterized into cells). A run that finds no changed bucket
-recomputes nothing.
-
-## Heatmap
-
-Every fix is also counted into `heatmap_cells`, one row per local day per cell
-of the web-mercator grid at zoom 22: the pixel grid of zoom 14 tiles, about 6 m
-across at 51 N. The selection is the day summary's, minus the fixes worse than
-200 m of horizontal accuracy, which would smear a whole neighbourhood into one
-6 m cell. Trips are rasterized as well as sampled: the cells on the straight
-line between two consecutive fixes of the same trip are counted too, under the
-distance rules (never across an item boundary, never inside a visit, never over
-a gap longer than ten minutes, and never for a leg longer than 2000 cells,
-which only a flight produces). Fixes alone land 20 to 30 m apart at cycling
-speed, so on a 6 m grid a route was a string of beads with neighbouring cells
-carrying unrelated day counts, and no kernel radius could smooth that. Cells
-are filled and cleared in the same pass that writes the day
-summary, so a day that loses its row loses its cells with it and `arches
-derive` rebuilds the table along with everything else. An existing database
-migrating to schema 4 comes out with the tables empty; one `arches derive`
-fills them.
-
-Coarser grids are a right shift of the indices, `x >> s, y >> s`, so one fine
-table serves every map zoom. `/api/heatmap` picks `s` from the requested zoom
-so that a cell lands on about four screen pixels, which MapLibre's heatmap
-layer then blurs; a full 1600 x 900 viewport comes out at up to about 30 000
-points at street zoom. Output is capped at 40 000 points, and going over means
-coarsening by another level and asking again rather than truncating: half a
-heatmap is a lie about where someone was.
-
-`weight=days`, the default, counts the distinct days a cell was recorded on.
-`weight=samples` sums the fixes. Days is the default because a night at home is
-thousands of samples in one cell and would wash out every route ever taken.
-`meta` carries `cellMetres`, `maxWeight`, `points`, `days` (how many days in
-the range put anything into the view) and `bbox` (the matched cells' extent,
-for framing the range on first load).
-
-Grouping the fine table turned out to cost about a third of a second for the
-all-time views: millions of rows once trips are rasterized, and a bounding box
-only seeks on `x`. So `heatmap_rollup` keeps the same per-day counts
-pre-shifted to every level from 1 to 14, and a query reads the level it
-actually wants. Both tables are keyed date first, so recomputing one day
-deletes a contiguous range rather than scanning every other day. The spatial
-indexes carry `samples` so a query is answered from the index alone; without
-that, every row cost a lookup back into the table and a street-level viewport
-took ten times as long. Rows are aggregated in Rust in one pass rather than
-with `GROUP BY` and `count(DISTINCT date)`, which cost SQLite a temp b-tree
-per group and a second scan for the day total.
-
-Warm timings on cassini in September 2026, over 936 days and 2.58 M samples,
-for a 1600 x 900 viewport over Dresden, all time unless noted:
-
-| Zoom | | |
-| --- | --- | --- |
-| 3 | 2 ms | 189 points |
-| 6 | 4 ms | 945 points |
-| 12 | 61 ms | 10 023 points |
-| 13 | 216 ms | 17 914 points |
-| 15 | 150 ms | 27 473 points |
-| 15, last 30 days | 51 ms | 5 887 points |
-| 17 | 69 ms | 7 118 points |
-
-About a third of the street-level time is gzip on the 3.4 MB of GeoJSON, which
-goes over the wire as 165 KB.
-
-## Confirmation
-
-Arc marks whether the user has reviewed an item: a visit is confirmed once its
-place is picked, a trip once it has a confirmed activity type, which Arc leaves
-unset until someone says so. Until then the place and the activity type are the
-app's guesses and may change under a consumer's feet. Both flags travel with
-every item as `confirmed` and `uncertain`, and a day summary carries
-`unconfirmedItems` plus a `confirmed` that is true only when every item counted
-on that day is confirmed. A day with no items at all is confirmed: there is
-nothing left to review. The most recent days are usually unconfirmed, since the
-backup on disk tends to predate the review.
-
-## Highlights
-
-`/api/highlights` turns what is already recorded into the handful of events
-worth a line in a feed or a journal, derived per request rather than stored:
-kilko.de is meant to pick them up later. Four kinds, each an object with
-`kind`, `date`, `title`, `confirmed` and its own fields:
-
-| Kind | |
-| --- | --- |
-| `country` | The first local day a country code appears in a day summary, with `countryCode` and `country`, the ISO 3166-1 English short name. |
-| `locality` | The same for a locality, with `locality` and, when the day touched exactly one country, `countryCode`. |
-| `flight` | A trip whose resolved activity type is `airplane`, with `itemId`, `distanceM`, `durationSeconds` and `from` and `to` as `{ locality, countryCode, placeName }`. |
-| `longest` | The longest walk, run, ride and hike of the range, each at least a kilometre, with `itemId`, `activityType`, `distanceM` and `durationSeconds`. |
-
-Country codes are reported in the uppercase ISO 3166-1 writes, on a first
-time and on a flight's endpoints alike: Arc stores whichever case the source
-had, so the same country arrives as `de` from a place and `DE` from a visit,
-and comparing them raw reported Germany twice.
-
-"First" means first over all of history, not first in the range: a country or
-a town first seen before `from` is not reported however often it comes back.
-That is why the endpoint reads every day summary up to `to` rather than only
-the ones in the range; at about a thousand rows a year that is cheaper than
-keeping a table of firsts in step with a backup Arc rewrites retroactively.
-Localities repeat across countries, so a first time is keyed on the pair: the
-Paris in Texas is its own event. A day that touched two countries cannot say
-which one a name belongs to, so it only counts if the name is new outright.
-
-A flight has to be at least 50 km: Arc types the taxi to the runway and split
-legs of a few hundred metres as airplane too, and those are not flights anyone
-would put in a feed. A flight's endpoints are the nearest visit before and after it, found by
-walking up to three `previousItemId` / `nextItemId` links past non-visits,
-because a walk through the terminal between the gate and the flight is normal.
-Anything further away is not the airport any more and the endpoint is null,
-which makes the title fall back from "Flight from Dresden to Lisboa" to the
-distance.
-
-Every highlight carries `confirmed`: the day's flag for a first time, the
-item's for a flight or a longest trip (see *Confirmation* above). **Filtering
-on it is the consumer's job.** A public feed should drop what has not been
-reviewed yet, since the place or the activity type behind it can still change;
-`?confirmed=true` does that server-side for a consumer that would rather not
-think about it. `kinds=` takes any comma-separated subset of the four, in any
-order; `from` and `to` are both required and at most 400 days apart. Events
-come back sorted by date, then by kind in the order above, then by title.
-
-## API
-
-Everything lives under `/api` and speaks JSON, except the GeoJSON and GPX
-renderings. Keys are camelCase, dates in paths and query strings are local
-`YYYY-MM-DD`, timestamps in responses are RFC 3339 strings, activity types are
-their enum names and local offsets appear as `utcOffsetSeconds`. Errors are
-`{ "error": "..." }` with 400 for a bad parameter, 404 for an id or date that
-is not there and 500 otherwise, the cause logged rather than returned. CORS
-allows any origin for GET and POST without credentials: the API is tailnet-only
-with no auth and pensieve's browser frontend fetches from it directly.
-
-| Endpoint | |
-| --- | --- |
-| `GET /api/status` | Version, last ingest run, Arc's `lastBackupDate`, newest bucket mtime, row counts, `bySource` (items and samples per `source`, with that source's first and last item), summarized date range and whether a pass is running. `bySource` counts samples through an index, which is about 0.2 s over four million of them. |
-| `GET /api/config` | The MapLibre style URL the frontend renders with. |
-| `POST /api/ingest` | Runs one pass now and returns its summary; queues behind the periodic one. |
-| `GET /api/days?from=&to=` | Day summaries in an inclusive range, default the last 30 days, at most 400. Days with no row are absent. |
-| `GET /api/days/{date}` | The day's summary plus its items in start order, each with the seconds it spent inside that day. |
-| `GET /api/days/{date}/geojson?simplify=` | FeatureCollection: a LineString per trip from its fixes, a Point per visit, every feature carrying its local `date`. |
-| `GET /api/days/geojson?from=&to=&simplify=` | The same rendering over an inclusive range, every day in one FeatureCollection. `from` and `to` are required and at most 62 days apart; days with no row contribute nothing, so an empty range is an empty collection rather than a 404. |
-| `GET /api/days/{date}.gpx` | GPX 1.1, a `<wpt>` per visit and a `<trk>` per trip. |
-| `GET /api/items/{id}` | One item, with its place if it is a visit. |
-| `GET /api/items/{id}/samples?simplify=` | The item's fixes in time order. |
-| `GET /api/places?q=&country=&limit=` | Places by name, locality or street address, most visited first. |
-| `GET /api/places/{id}` | One place. |
-| `GET /api/places/{id}/visits?from=&to=&limit=` | Visits there, newest first. |
-| `GET /api/near?lat=&lon=&radius=` | Places within a radius in metres (default 250, max 5000), nearest first, each with `distanceM`. |
-| `GET /api/at?ts=` | The item covering an instant, preferring the visit; `{ "item": null }` when nothing does, not a 404. |
-| `GET /api/heatmap?bbox=&zoom=&from=&to=&weight=` | Everywhere you have been in a range, binned for the viewport: a FeatureCollection of cell-centre Points with a `weight`, plus a `meta` member. `bbox` and `zoom` are required. See *Heatmap* above. |
-| `GET /api/highlights?from=&to=&kinds=&confirmed=` | The notable events of a range: first time in a country or a town, flights, the longest trip per activity type. `from` and `to` are required and at most 400 days apart. See *Highlights* above. |
-
-`simplify=<metres>` runs Ramer-Douglas-Peucker over the coordinate chain with
-that tolerance, measured on a local equirectangular projection so the number is
-metres rather than degrees. Without it the full trace is returned. A trace drops
-fixes worse than 200 m of horizontal accuracy, the same ones the derivation
-refuses to measure distance from.
-
-The React UI is embedded in the binary and served at `/`, with any path that is
-not a file and not under `/api` falling back to `index.html` so client-side
-routes deep-link. `web/dist` is gitignored, so a checkout that never ran
-`pnpm --dir web build` still builds: `build.rs` creates the directory and `/`
-answers with a plain note saying the UI is not in this binary.
-
-While `arches serve` is running, ingest polls Arc's buckets every
-`ARCHES_INGEST_INTERVAL`, starting immediately. It runs on a connection of its
-own; requests read through separate connections, which WAL lets them do while a
-pass is writing.
-
-## Web UI
-
-A React app in `web/`, built with Vite and embedded in the binary. The map is
-the subject: a full-bleed MapLibre canvas on the OpenFreeMap style from
-`/api/config`, with a rail of chrome floating over it. Below 720 px the rail
-becomes a bottom sheet.
-
-| Route | |
-| --- | --- |
-| `/` | Redirects to today's local day. |
-| `/day/{date}` | The day's track on the map and its timeline in the rail: time range, place or activity, distance or duration, totals and an unconfirmed count. |
-| `/month/{yyyy-mm}` | A calendar of the month, each day a distance bar segmented by activity type. |
-| `/week/{yyyy-Www}` | Seven 24 hour strips, one per ISO-week day, items drawn as blocks by clipped time. |
-| `/place/{id}` | One place, its address and counts, and its visits newest first. |
-| `/heat?from=&to=&weight=` | The heatmap over a range of days, with presets, two date inputs and a days/samples toggle. Both travel in the URL. |
-| `/highlights?from=&to=` | The notable events of a range, grouped by month, each linking to its day; an unconfirmed one is marked with a dashed rule. |
-
-The week and month views frame their range and draw it too: both ask
-`/api/days/geojson` for the whole range as one collection, simplified to 15 m
-and 25 m respectively, and the month drops the visit points because a few
-hundred of them at that zoom read as a carpet rather than as places.
-
-Every route deep-links; unknown paths fall back to the shell, so the browser's
-address bar is a usable input. In the day view the left and right arrow keys
-step to the previous and next day *that has data*: the navigation asks
-`/api/days` for a window around the date rather than walking into the middle of
-a four-month recording gap.
-
-Colour means exactly one thing, the activity type, and it is defined once in
-`web/src/lib/activity.ts` and mirrored into CSS custom properties at startup so
-the map lines, the timeline rules, the calendar bars and the week blocks cannot
-disagree:
-
-| | | | | | | | | |
-| --- | --- | --- | --- | --- | --- | --- | --- | --- |
-| walking | running | cycling | car | bus | train | tram | airplane | other |
-| `#3c7a1e` | `#a92e72` | `#0e7b72` | `#be3a2e` | `#b0690c` | `#2b4ca8` | `#7040a6` | `#1b6c93` | `#7a7420` |
-
-The heatmap is the one thing that does not take a colour from that table. It
-renders on the dark basemap from `ARCHES_MAP_STYLE_DARK` with a magma ramp,
-transparent through dark purple, magenta, red and orange to yellow, so heat
-climbs in luminance as well as hue against the dark ground. The kernel radius
-follows the cell size each response reports, 3.5 times the cells' spacing on
-screen, and doubles per zoom level until the next fetch so the cells never
-drift apart from their kernels. MapLibre's kernel is a Gaussian with sigma at a
-third of the radius, and its shader also shrinks a faint point's quad by its
-weight, so anything much tighter than that, or a weight near zero, shows the
-grid through the blur; weights therefore have a floor of 0.15. The weight
-goes through a logarithm before it is normalised against the response's own
-maximum. Counting days over three years, the cell holding a desk is 900 and a
-street walked once is 1; linearly that street is a thousandth of full heat and
-invisible, and a square root only gets it to a thirtieth. The logarithm puts it
-at a tenth, which is the difference between a map of routes and a map of one
-bright dot.
-
-Visits are ink (`#1b2230`), not a hue. Confirmation state never takes a colour
-of its own: an item Arc has not had confirmed is drawn dashed, on the map, in
-the rail and in the calendar, so the palette keeps meaning activity.
-
-Times are rendered in the offset the day was recorded in, from the API's
-`utcOffsetSeconds` and the item's own start and end offsets, never in the
-browser's timezone. A day in Bangkok reads in Bangkok time from anywhere.
-
-maplibre-gl is loaded lazily, so the calendar and week grids render before the
-map library arrives, and a map that cannot start (no WebGL) leaves the lists
-intact rather than taking the page down. MapLibre parses vector tiles in a web
-worker that it locates at runtime, which Vite cannot see; `MapView.tsx` imports
-the worker with `?worker&url` and hands MapLibre that URL. Without it the
-production build serves the SPA shell in place of the worker and the map shows
-only the low-zoom raster layer.
-
-### Building it into the binary
-
-`cargo build` embeds whatever is in `web/dist` at compile time via `rust-embed`,
-so the UI is built first:
-
-```
+direnv allow            # or: nix develop
 pnpm --dir web install
-pnpm --dir web build
-cargo build --release
 ```
 
-`web/dist` is gitignored; `build.rs` creates it empty so a fresh checkout still
-compiles, and `/` then answers with a note saying the UI is not in this binary.
-During development run `pnpm --dir web dev` instead and let Vite proxy `/api` to
-`arches serve`.
-
-## Development
-
-This project uses a Nix flake and direnv:
+For development run the backend and the Vite dev server side by side. Vite
+proxies `/api` to the backend; `ARCHES_API_URL` points it elsewhere.
 
 ```
-direnv allow      # or: nix develop
-cargo run -- serve
-pnpm --dir web dev
+cargo run -- serve      # API on 127.0.0.1:8471, ingest every 15 minutes
+pnpm --dir web dev      # UI on http://localhost:5173
 ```
 
-The backend listens on `ARCHES_BIND` (default `127.0.0.1:8471`); the Vite
-dev server proxies `/api` to it.
+The first pass ingests the whole backup and takes a few minutes, almost all
+of it waiting for iCloud to download the buckets. Later passes only read
+files that changed. `data/` is gitignored, so `ARCHES_DATA_DIR=data` keeps a
+development database inside the checkout. To try the app without the real
+backup, ingest the test fixtures:
 
-Backend checks:
+```
+ARCHES_DATA_DIR=data ARCHES_ARC_DIR=tests/fixtures/backup ARCHES_GPX_DIR=tests/fixtures/gpx cargo run -- ingest
+```
+
+Subcommands: `serve`, `ingest` (one pass), `derive` (rebuild every derived
+row from scratch, for when the rules change) and `status [--json]`.
+
+Checks:
 
 ```
 cargo fmt --check
 cargo clippy --all-targets -- -D warnings
 cargo test
-```
-
-Frontend checks (pnpm, not npm):
-
-```
 pnpm --dir web lint
-pnpm --dir web format
 pnpm --dir web test
-pnpm --dir web build
 ```
+
+Deployment is a single binary with the UI embedded:
+
+```
+pnpm --dir web build
+cargo build --release   # or: nix build
+```
+
+`cargo build` embeds whatever is in `web/dist` at compile time. The folder is
+gitignored and `build.rs` creates it empty, so a checkout that never built the
+UI still compiles and `/` says the UI is missing.
 
 ## Configuration
 
-All configuration is via environment variables:
+Everything is configured through environment variables:
 
-| Variable                 | Default                                                                              | Meaning                                    |
-| ------------------------ | ------------------------------------------------------------------------------------- | ------------------------------------------- |
-| `ARCHES_ARC_DIR`          | `~/Library/Mobile Documents/iCloud~com~bigpaua~Arc-Timeline-Editor/Documents`          | Arc's iCloud `Documents` dir. Read-only.   |
-| `ARCHES_GPX_DIR`          | none                                                                                   | Directory of daily GPX files to ingest as history. Read-only. Unset means no GPX ingest at all. |
-| `ARCHES_DATA_DIR`         | `~/Library/Application Support/arches`                                                | Where arches writes its database and raw mirror. |
-| `ARCHES_BIND`             | `127.0.0.1:8471`                                                                       | Address the HTTP API binds to.             |
-| `ARCHES_MAP_STYLE`        | `https://tiles.openfreemap.org/styles/liberty`                                        | MapLibre style URL served to the frontend. |
-| `ARCHES_MAP_STYLE_DARK`   | `https://tiles.openfreemap.org/styles/dark`                                           | Dark style the heatmap view renders on. |
-| `ARCHES_INGEST_INTERVAL`  | `15m`                                                                                  | How often ingest polls Arc's buckets (`s`/`m`/`h` suffix). |
-| `RUST_LOG`                | `info`                                                                                 | Log filter (tracing `EnvFilter` syntax). |
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `ARCHES_ARC_DIR` | `~/Library/Mobile Documents/iCloud~com~bigpaua~Arc-Timeline-Editor/Documents` | Arc's iCloud `Documents` dir. Read-only. |
+| `ARCHES_GPX_DIR` | none | Directory of daily GPX files to ingest as history. Read-only. Unset means no GPX ingest. |
+| `ARCHES_DATA_DIR` | `~/Library/Application Support/arches` | Where the database and the raw mirror go. |
+| `ARCHES_BIND` | `127.0.0.1:8471` | Address the HTTP API binds to. No auth, so exposing it is a deployment choice. |
+| `ARCHES_MAP_STYLE` | `https://tiles.openfreemap.org/styles/liberty` | MapLibre style URL for the frontend. |
+| `ARCHES_MAP_STYLE_DARK` | `https://tiles.openfreemap.org/styles/dark` | Style the heatmap renders on. |
+| `ARCHES_INGEST_INTERVAL` | `15m` | How often `serve` polls for changes (`s`, `m` or `h` suffix). |
+| `RUST_LOG` | `info` | Log filter in tracing `EnvFilter` syntax. |
+
+## How it works
+
+- Arc backs up to `<ARCHES_ARC_DIR>/Backup/<device-uuid>/` in LocoKit2's
+  bucketed export format, specified in
+  [docs/export/FORMAT.md](https://github.com/sobri909/LocoKit2/blob/main/docs/export/FORMAT.md):
+  places bucketed by UUID prefix, items by month, samples by ISO week, plain
+  or gzipped. arches reads the device whose backup finished most recently.
+  Files iCloud has evicted are skipped and logged.
+- An ingest pass compares each bucket's mtime and size with what it saw last
+  time, copies a changed file into `<ARCHES_DATA_DIR>/raw/` and parses the
+  copy, so an evicted file is downloaded once and the mirror doubles as an
+  off-iCloud backup. Records are upserted and an older `lastSaved` never
+  overwrites a newer one. Nothing is deleted; Arc marks removals with
+  `deleted`. A file that fails to parse is logged and left for the next pass,
+  the rest still go in.
+- `ARCHES_GPX_DIR` is an optional second source: one GPX file per UTC day, the
+  shape Arc's own exports have. Tracks become trips, waypoints become visits
+  and named places, all under the file's `creator` as their `source`. Ids are
+  hashes of file and element, so a re-export upserts in place, and a visit
+  that spans midnight appears in both files and merges into one item. A file
+  dated on or after Arc's first day is skipped: Arc has ids, accuracies and
+  confirmed places, the import has none of that. GPX carries no addresses or
+  country codes either, so the history produces no first-time highlights.
+- A day is a local day, never the UTC day. Arc records `secondsFromGMT` on
+  samples and places; GPX times are UTC and get their offset from the
+  coordinate (tzf-rs for the zone, jiff for the offset). Items get separate
+  start and end offsets, since a flight lands in another one, and an item
+  running over local midnight is clipped into both days.
+- Ingest derives what it touched: a summary per day (distance and duration
+  per activity type, visits, places, countries, bbox) and heatmap cells on a
+  zoom 22 web-mercator grid with coarser rollups. Distance is summed between
+  consecutive fixes of the same trip, never over a gap longer than ten minutes
+  and never from a fix worse than 200 m of accuracy. A day only gets a row if
+  it recorded something, so recording gaps stay gaps. `arches derive` rebuilds
+  all of it when the rules change.
+- Arc marks a visit confirmed once its place is picked and a trip once its
+  activity type is; until then both are guesses that may change. Items carry
+  `confirmed` and `uncertain`, a day is `confirmed` only when every item on it
+  is, and highlights carry the flag along. Filtering on it is the consumer's
+  job; `?confirmed=true` does it server-side.
+
+## API
+
+Everything lives under `/api` and speaks JSON, except the GeoJSON and GPX
+renderings. Keys are camelCase, dates are local `YYYY-MM-DD`, timestamps are
+RFC 3339, activity types are their enum names. Errors are `{ "error": "..." }`
+with 400, 404 or 500. CORS allows any origin: the API is tailnet-only with no
+auth and pensieve's frontend fetches from it directly.
+
+| Endpoint | |
+| --- | --- |
+| `GET /api/status` | Last ingest run, Arc's `lastBackupDate`, row counts per source. |
+| `GET /api/config` | Map style URLs for the frontend. |
+| `POST /api/ingest` | Run one pass now. |
+| `GET /api/days?from=&to=` | Day summaries, default the last 30 days, at most 400. |
+| `GET /api/days/{date}` | The day's summary and its items in start order. |
+| `GET /api/days/{date}/geojson?simplify=` | A LineString per trip, a Point per visit. |
+| `GET /api/days/geojson?from=&to=&simplify=` | The same over a range of at most 62 days. |
+| `GET /api/days/{date}.gpx` | GPX 1.1 rendering. |
+| `GET /api/items/{id}` | One item, with its place if it is a visit. |
+| `GET /api/items/{id}/samples?simplify=` | The item's fixes in time order. |
+| `GET /api/places?q=&country=&limit=` | Places by name, locality or address, most visited first. |
+| `GET /api/places/{id}` | One place. |
+| `GET /api/places/{id}/visits?from=&to=&limit=` | Visits there, newest first. |
+| `GET /api/near?lat=&lon=&radius=` | Places within a radius in metres, nearest first. |
+| `GET /api/at?ts=` | The item covering an instant, `{ "item": null }` when none. |
+| `GET /api/heatmap?bbox=&zoom=&from=&to=&weight=` | Cell-centre Points with a `weight`, binned for the viewport, plus `meta`. `weight=days` (default) counts distinct days per cell so a night at home does not outweigh every route; `samples` sums fixes. |
+| `GET /api/highlights?from=&to=&kinds=&confirmed=` | First day in a country or a locality, flights of at least 50 km, the longest walk, run, ride and hike. "First" means first ever, not first in the range. At most 400 days. |
+
+`simplify=<metres>` runs Ramer-Douglas-Peucker with that tolerance. Traces
+drop fixes worse than 200 m of accuracy.
+
+While `arches serve` runs, ingest polls every `ARCHES_INGEST_INTERVAL`,
+starting immediately. The UI is served at `/`, with unknown paths falling
+back to `index.html` so client-side routes deep-link.
+
+## Web UI
+
+A full-bleed MapLibre map on the OpenFreeMap style with a rail of chrome over
+it; below 720 px the rail becomes a bottom sheet. Every route deep-links.
+
+| Route | |
+| --- | --- |
+| `/` | Redirects to today. |
+| `/day/{date}` | The day's track and timeline. Arrow keys step to the previous and next day with data. |
+| `/week/{yyyy-Www}` | Seven 24 hour strips, items drawn as blocks. |
+| `/month/{yyyy-mm}` | A calendar, each day a distance bar by activity type. |
+| `/place/{id}` | One place and its visits. |
+| `/heat?from=&to=&weight=` | The heatmap over a range, on the dark style. |
+| `/highlights?from=&to=` | The notable events of a range, grouped by month. |
+
+Colour means the activity type and nothing else, defined once in
+`web/src/lib/activity.ts`. Unconfirmed items are drawn dashed. Times render
+in the offset the day was recorded in, never the browser's timezone.

@@ -223,9 +223,9 @@ CREATE TABLE heatmap_cells (
 CREATE INDEX idx_heatmap_cells_xy ON heatmap_cells(x, y);
 
 -- The same counts pre-shifted to a handful of coarser grids. Zoomed out, the fine table is
--- hundreds of thousands of rows for a few thousand points, and grouping them costs a third of
--- a second; see README.md for the measurements. Still keyed by day, so a recomputed day
--- rewrites only its own rows and `count(DISTINCT date)` still means days.
+-- hundreds of thousands of rows for a few thousand points, and grouping them costs about a
+-- third of a second. Still keyed by day, so a recomputed day rewrites only its own rows and
+-- `count(DISTINCT date)` still means days.
 CREATE TABLE heatmap_rollup (
     date     TEXT NOT NULL,
     shift    INTEGER NOT NULL,

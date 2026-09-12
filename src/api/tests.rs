@@ -766,13 +766,13 @@ async fn heatmap_aggregates_by_zoom_and_by_weight() {
     // Two fixes on the 10th and one on the 12th, where counting days said 2.
     assert_eq!(samples["meta"]["maxWeight"], 3);
 
-    let far = fixture.ok(&format!("/api/heatmap?{DRESDEN}&zoom=6")).await;
+    let far = fixture.ok(&format!("/api/heatmap?{DRESDEN}&zoom=5")).await;
     assert_eq!(far["meta"]["points"], 1);
     assert_eq!(far["meta"]["maxWeight"], 2);
     assert!(far["meta"]["cellMetres"].as_f64().unwrap() > 5_000.0);
 
     let far_samples = fixture
-        .ok(&format!("/api/heatmap?{DRESDEN}&zoom=6&weight=samples"))
+        .ok(&format!("/api/heatmap?{DRESDEN}&zoom=5&weight=samples"))
         .await;
     // Every fix on both days minus the one with no coordinates, plus the cells the trips were
     // rasterized through: more than the fixes, and the same total the zoomed-in view added up to.
@@ -808,7 +808,7 @@ async fn heatmap_respects_the_date_range_and_the_viewport() {
 
     let second = fixture
         .ok(&format!(
-            "/api/heatmap?{DRESDEN}&zoom=6&from=2025-06-12&to=2025-06-12&weight=samples"
+            "/api/heatmap?{DRESDEN}&zoom=5&from=2025-06-12&to=2025-06-12&weight=samples"
         ))
         .await;
     assert_eq!(second["meta"]["days"], 1);
@@ -816,7 +816,7 @@ async fn heatmap_respects_the_date_range_and_the_viewport() {
 
     let none = fixture
         .ok(&format!(
-            "/api/heatmap?{DRESDEN}&zoom=6&from=2025-06-13&to=2025-06-30"
+            "/api/heatmap?{DRESDEN}&zoom=5&from=2025-06-13&to=2025-06-30"
         ))
         .await;
     assert_eq!(none["meta"]["points"], 0);

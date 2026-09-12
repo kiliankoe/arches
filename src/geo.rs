@@ -7,8 +7,8 @@ use std::f64::consts::PI;
 const EARTH_RADIUS_M: f64 = 6_371_008.8;
 
 /// The grid heatmap cells are counted on: web-mercator tile coordinates at zoom 22, which is the
-/// pixel grid of zoom 14 tiles and about 6 m per cell at 51 N. Coarser levels are a right shift
-/// of the indices, so one fine table serves every zoom.
+/// pixel grid of MapLibre's 512 px tiles at zoom 13 and about 6 m per cell at 51 N. Coarser
+/// levels are a right shift of the indices, so one fine table serves every zoom.
 pub const CELL_ZOOM: u32 = 22;
 
 /// The coarser grids `heatmap_rollup` keeps a copy of the counts on, as shifts from

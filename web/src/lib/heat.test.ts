@@ -44,17 +44,13 @@ describe("heatSearch", () => {
 });
 
 describe("heatRadiusExpression", () => {
-  /** At zoom 14 on the equator a pixel is about 9.55 m, so a 76 m cell is 8 px and the kernel 3.5x that. */
-  it("scales the kernel with the cell's size on screen", () => {
-    const [, , , zoom, radius, nextZoom, farRadius] = heatRadiusExpression(76.4, 14, 0) as number[];
-    expect(zoom).toBe(14);
-    expect(radius).toBeCloseTo(28, 0);
-    expect(nextZoom).toBe(24);
-    expect(farRadius).toBeCloseTo(radius * 1024, 3);
-  });
-
-  it("never drops below the minimum when cells are subpixel", () => {
-    const [, , , , radius] = heatRadiusExpression(6, 3, 51) as number[];
-    expect(radius).toBe(14);
+  /** At zoom 14 on the equator a pixel is about 4.78 m, so a 38.2 m cell is 8 px and the kernel three cells. */
+  it("puts the kernel at three cells and doubles it per zoom level in both directions", () => {
+    const [, , , low, lowRadius, high, highRadius] = heatRadiusExpression(38.2, 14, 0) as number[];
+    expect(low).toBe(0);
+    expect(high).toBe(24);
+    // Base-2 exponential interpolation between the two stops is r * 2^(z - 14).
+    expect(lowRadius * 2 ** 14).toBeCloseTo(24, 1);
+    expect(highRadius / 2 ** 10).toBeCloseTo(24, 1);
   });
 });

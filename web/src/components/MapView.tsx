@@ -24,7 +24,12 @@ import workerUrl from "maplibre-gl/dist/maplibre-gl-worker.mjs?worker&url";
 import { useEffect, useRef } from "react";
 import type { Bbox, DayGeoJson, HeatGeoJson } from "../api";
 import { activityMatchExpression, VISIT_COLOR } from "../lib/activity";
-import { HEAT_RAMP, heatRadiusExpression, heatWeightExpression } from "../lib/heatLayer";
+import {
+  HEAT_INTENSITY,
+  HEAT_RAMP,
+  heatRadiusExpression,
+  heatWeightExpression,
+} from "../lib/heatLayer";
 
 /** What the map is currently showing, for a view that fetches per viewport. */
 export type Viewport = { bbox: Bbox; zoom: number };
@@ -281,8 +286,7 @@ function addLayers(instance: MapLibreMap) {
       // fetch.
       "heatmap-radius": 18,
       "heatmap-radius-transition": { duration: 0 },
-      // Below one the shader truncates faint kernels; see `heatLayer.ts`.
-      "heatmap-intensity": 1,
+      "heatmap-intensity": HEAT_INTENSITY,
       "heatmap-opacity": 0.85,
     },
   });

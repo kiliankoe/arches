@@ -19,18 +19,19 @@ use crate::geo::{
     CELL_ZOOM, MAX_MERCATOR_LAT, ROLLUP_SHIFTS, cell_centre, cell_metres, cell_of, cell_position,
 };
 
-/// More points than this and MapLibre spends longer uploading the source than drawing it. Going
-/// over means coarsening, never truncating: half a heatmap is a lie about where someone was.
-/// A full viewport at street zoom is around 30 000 once the trips are rasterized into cells.
-const MAX_POINTS: usize = 40_000;
+/// More points than this and MapLibre spends longer loading the source than drawing it: about
+/// a quarter of a second at this many. Going over means coarsening, never truncating: half a
+/// heatmap is a lie about where someone was. A street-level viewport on a laptop screen is
+/// twenty to forty thousand points once the trips are rasterized into cells.
+const MAX_POINTS: usize = 100_000;
 
-/// How many levels coarser than a screen pixel a cell is drawn at, so a point covers about
-/// four pixels. MapLibre's heatmap layer blurs each point over a few cells anyway, and a view
-/// at one point per pixel is a hundred thousand points for no visible gain.
+/// How many levels coarser than a screen pixel a cell is drawn at, so a cell covers about
+/// four pixels. The kernel that hides the grid is three cells wide, so the cell size sets the
+/// width of a route on screen; at eight pixels the routes read as blurry bands.
 const PIXEL_SHIFT: i64 = 2;
 
-/// A tile is 256 px, so the pixel grid at map zoom `z` is the tile grid at `z + 8`.
-const TILE_PIXELS_SHIFT: i64 = 8;
+/// MapLibre's tiles are 512 px, so the pixel grid at map zoom `z` is the tile grid at `z + 9`.
+const TILE_PIXELS_SHIFT: i64 = 9;
 
 /// Four cells across the world is as coarse as coarsening ever needs to get.
 const MAX_SHIFT: u32 = CELL_ZOOM - 4;
@@ -318,17 +319,20 @@ mod tests {
     use super::*;
 
     /// At the default coarsening a cell is about four screen pixels, which is what keeps a
-    /// full viewport in the tens of thousands of points at most.
+    /// full viewport in the tens of thousands of points.
     #[test]
     fn the_shift_tracks_the_zoom_and_stops_at_both_ends() {
-        assert_eq!(shift_for(14.0), CELL_ZOOM - 14 - 8 + PIXEL_SHIFT as u32);
+        assert_eq!(
+            shift_for(14.0),
+            CELL_ZOOM + PIXEL_SHIFT as u32 - 14 - TILE_PIXELS_SHIFT as u32
+        );
         assert_eq!(shift_for(12.4), shift_for(12.0));
         assert_eq!(shift_for(12.6), shift_for(13.0));
         // One step of zoom is one step of coarsening, so cells stay the same size on screen.
         assert_eq!(shift_for(6.0) - shift_for(7.0), 1);
-        // Zoomed all the way out a cell is a level 5 tile; zoomed in it is the grid itself.
-        assert_eq!(shift_for(0.0), 16);
-        assert_eq!(shift_for(16.0), 0);
+        // Zoomed all the way out a cell is a level 7 tile; zoomed in it is the grid itself.
+        assert_eq!(shift_for(0.0), 15);
+        assert_eq!(shift_for(15.0), 0);
         assert_eq!(shift_for(24.0), 0);
     }
 

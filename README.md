@@ -52,16 +52,23 @@ pnpm --dir web lint
 pnpm --dir web test
 ```
 
-Deployment is a single binary with the UI embedded:
+Deployment is a single binary with the UI embedded. `nix build` does both
+steps; by hand they are:
 
 ```
 pnpm --dir web build
-cargo build --release   # or: nix build
+cargo build --release
 ```
 
 `cargo build` embeds whatever is in `web/dist` at compile time. The folder is
 gitignored and `build.rs` creates it empty, so a checkout that never built the
 UI still compiles and `/` says the UI is missing.
+
+On voyager arches runs as a launchd user agent bound to the tailnet address,
+defined in `hosts/voyager/arches.nix` of the nix config. Both sources sit in
+locations macOS guards with TCC (iCloud Drive and `~/Documents`), which a
+background agent can only read once the binary has Full Disk Access. That
+grant and "Keep Downloaded" on the Arc folder are the two manual steps.
 
 ## Configuration
 

@@ -184,14 +184,14 @@ async fn serve() -> anyhow::Result<()> {
         "starting arches"
     );
 
-    let bind = config.bind.clone();
+    // Bind before anything else starts. Under launchd the Tailscale address may not exist yet
+    // at login; failing here leaves no half-done ingest behind for the restart to run into.
+    let listener = tokio::net::TcpListener::bind(&config.bind).await?;
+    tracing::info!("listening on http://{}", listener.local_addr()?);
+
     // Ingest gets its own connection for the life of the process; readers open their own.
     let state = api::AppState::new(config, db::open(&db_path)?);
     state.spawn_periodic_ingest();
-    let app = api::router(state);
-
-    let listener = tokio::net::TcpListener::bind(&bind).await?;
-    tracing::info!("listening on http://{}", listener.local_addr()?);
-    axum::serve(listener, app).await?;
+    axum::serve(listener, api::router(state)).await?;
     Ok(())
 }

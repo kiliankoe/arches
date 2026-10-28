@@ -290,6 +290,9 @@ fn prepare(mut conn: Connection) -> Result<Connection> {
     conn.pragma_update(None, "journal_mode", "WAL")?;
     // Durable enough under WAL: a crash can lose the last transaction, which ingest re-does.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // A full ingest or derive is one transaction and grows the WAL past a gigabyte. SQLite only
+    // reuses that space, so without a limit the file stays that size after every checkpoint.
+    conn.pragma_update(None, "journal_size_limit", 64 * 1024 * 1024)?;
     // Buckets arrive in whatever order Arc wrote them, so samples routinely reference items
     // that are not ingested yet. Referential integrity is Arc's job, not ours.
     conn.pragma_update(None, "foreign_keys", "OFF")?;
@@ -349,6 +352,41 @@ mod tests {
             .pragma_query_value(None, "foreign_keys", |row| row.get(0))
             .unwrap();
         assert_eq!(foreign_keys, 0);
+    }
+
+    /// A full ingest or `arches derive` is one huge transaction. The WAL it leaves behind has to
+    /// shrink again once checkpointed, or the file keeps that high-water mark for good.
+    #[test]
+    fn wal_shrinks_back_after_a_large_transaction() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("arches.db");
+        let wal = temp.path().join("arches.db-wal");
+        let conn = open(&path).unwrap();
+        let limit: i64 = conn
+            .pragma_query_value(None, "journal_size_limit", |row| row.get(0))
+            .unwrap();
+        assert!(limit > 0, "journal_size_limit is {limit}");
+
+        // Each row is stored twice, in the table and in its primary key index, and random keys
+        // leave split pages half full, so a quarter of the limit in rows fills the WAL past it.
+        let rows = limit / 4000;
+        conn.execute(
+            "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < ?)
+             INSERT INTO ingest_files (path, device_id, mtime, len, ingested_at, record_count)
+             SELECT hex(randomblob(500)), 'd', 0, 0, 0, 0 FROM n",
+            [rows],
+        )
+        .unwrap();
+        let grown = std::fs::metadata(&wal).unwrap().len();
+        assert!(grown as i64 > limit, "test transaction too small: {grown}");
+
+        conn.pragma_update(None, "wal_checkpoint", "PASSIVE")
+            .unwrap();
+        conn.execute("DELETE FROM ingest_files WHERE rowid = 1", [])
+            .unwrap();
+
+        let shrunk = std::fs::metadata(&wal).unwrap().len();
+        assert!(shrunk as i64 <= limit, "WAL still {shrunk} bytes");
     }
 
     #[test]

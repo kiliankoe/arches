@@ -50,6 +50,13 @@
               pkgs.nodejs_26
               pnpm
               pkgs.pnpmConfigHook
+              pkgs.pkg-config
+            ];
+            # nixpkgs' cargo setup hook makes -sys crates link system libraries even where a
+            # crate asks for its bundled copy, as rusqlite does here.
+            buildInputs = [
+              pkgs.sqlite
+              pkgs.zstd
             ];
             pnpmDeps = pkgs.fetchPnpmDeps {
               inherit pname version pnpm;

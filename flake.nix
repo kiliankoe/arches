@@ -63,7 +63,7 @@
               src = self;
               sourceRoot = "source/web";
               fetcherVersion = 4;
-              hash = "sha256-ZppvpZ7tHKbsYbQGsAiM9LP7sCVjHE/7WcoufTKH0Gw=";
+              hash = "sha256-BFUhA+VJQoIPT3iRub5nGe5PEvnNr9mEgNF1VmjVTII=";
             };
             pnpmRoot = "web";
             # build.rs embeds whatever is in web/dist when cargo runs, so the UI goes first.
